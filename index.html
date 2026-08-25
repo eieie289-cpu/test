@@ -3018,6 +3018,11 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
   const [overItem, setOverItem] = useState(null); // { id, cat } จุดที่กำลังจะปล่อย (ไฮไลต์)
   const [dragCat, setDragCat] = useState(null); // id หมวดที่กำลังลาก
   const [overCat, setOverCat] = useState(null); // id หมวดที่กำลังจะปล่อย (ไฮไลต์)
+  // ---- ลากวางกลุ่ม/ตัวเลือกเพิ่ม (ในฟอร์มแก้ไขเมนู) — แพทเทิร์นเดียวกับลากเมนู/หมวดข้างบน ----
+  const [dragGroup, setDragGroup] = useState(null); // id กลุ่มตัวเลือกเพิ่มที่กำลังลาก
+  const [overGroup, setOverGroup] = useState(null); // id กลุ่มที่กำลังจะปล่อย (ไฮไลต์)
+  const [dragOption, setDragOption] = useState(null); // { id, gid } ตัวเลือกย่อยที่กำลังลาก
+  const [overOption, setOverOption] = useState(null); // { id, gid } ตัวเลือกย่อยที่กำลังจะปล่อย (ไฮไลต์)
 
   // ซิงก์ค่าจากข้อมูลร้าน (ตอนโหลดหน้า / เมื่อพนักงานเครื่องอื่นแก้แล้วทุกเครื่องเห็น)
   useEffect(() => {
@@ -3263,6 +3268,8 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
     if (!d.moved) {
       d.moved = true;
       if (d.kind === "item") setDragItem({ id: d.id, cat: d.cat });
+      else if (d.kind === "option") setDragOption({ id: d.id, gid: d.cat });
+      else if (d.kind === "group") setDragGroup(d.id);
       else setDragCat(d.id);
     }
     d.lastX = t.clientX;
@@ -3286,6 +3293,14 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
           const card = under && under.closest("[data-item-id]");
           const nid = card ? card.dataset.itemId : null;
           setOverItem((prev) => (prev && prev.id === nid ? prev : nid ? { id: nid, cat: card.dataset.cat } : null));
+        } else if (dd.kind === "option") {
+          const row = under && under.closest("[data-option-id]");
+          const nid = row ? row.dataset.optionId : null;
+          setOverOption((prev) => (prev && prev.id === nid ? prev : nid ? { id: nid, gid: row.dataset.groupId } : null));
+        } else if (dd.kind === "group") {
+          const row = under && under.closest("[data-group-id]");
+          const nid = row ? row.dataset.groupId : null;
+          setOverGroup((prev) => (prev === nid ? prev : nid));
         } else {
           const row = under && under.closest("[data-cat-id]");
           const nid = row ? row.dataset.catId : null;
@@ -3310,6 +3325,12 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
       if (d.kind === "item") {
         const card = under && under.closest("[data-item-id]");
         if (card) dropItem({ id: d.id, cat: d.cat }, { id: card.dataset.itemId, cat: card.dataset.cat });
+      } else if (d.kind === "option") {
+        const row = under && under.closest("[data-option-id]");
+        if (row) dropOption({ id: d.id, gid: d.cat }, { id: row.dataset.optionId, gid: row.dataset.groupId });
+      } else if (d.kind === "group") {
+        const row = under && under.closest("[data-group-id]");
+        if (row) reorderGroup(d.id, row.dataset.groupId);
       } else {
         const row = under && under.closest("[data-cat-id]");
         if (row) reorderCategory(d.id, row.dataset.catId);
@@ -3320,6 +3341,10 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
     setOverItem(null);
     setDragCat(null);
     setOverCat(null);
+    setDragGroup(null);
+    setOverGroup(null);
+    setDragOption(null);
+    setOverOption(null);
   };
   const cancelTouchDrag = () => {
     const d = touchDragRef.current;
@@ -3332,6 +3357,10 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
     setOverItem(null);
     setDragCat(null);
     setOverCat(null);
+    setDragGroup(null);
+    setOverGroup(null);
+    setDragOption(null);
+    setOverOption(null);
   };
 
   // ต่อ touch drag ผ่าน native listener (React รับ touchstart/touchmove เป็น passive ที่ root —
@@ -3348,18 +3377,21 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
         startTouchDrag(t, grip.dataset.touchKind, grip.dataset.touchId, grip.dataset.touchCat, grip.dataset.touchLabel);
         return;
       }
-      // แตะบนการ์ดเมนู/แถวหมวดโดยตรง (ไม่ใช่ปุ่ม/อินพุต) → กดค้าง 300ms แล้วค่อยเริ่มลาก
+      // แตะบนการ์ดเมนู/แถวหมวด/แถวกลุ่มตัวเลือก/แถวตัวเลือกย่อยโดยตรง (ไม่ใช่ปุ่ม/อินพุต) → กดค้าง 300ms แล้วค่อยเริ่มลาก
       // (ต้องกดค้างก่อน ไม่งั้นนิ้วที่เลื่อนหน้าปกติจะโดนแย่งไปลากการ์ดตลอด)
       if (pendingTouchRef.current) { clearTimeout(pendingTouchRef.current.timer); pendingTouchRef.current = null; }
       const interactive = closest("button, input, select, textarea, a, label");
       if (interactive) return;
+      // ตัวเลือกย่อยซ้อนอยู่ใน div ของกลุ่ม เลยต้องเช็คตัวเลือกก่อนกลุ่ม ไม่งั้นแตะตัวเลือกจะโดนจับเป็นลากกลุ่มแทน
       const card = closest("[data-item-id]");
-      const row = !card ? closest("[data-cat-id]") : null;
-      const kind = card ? "item" : row ? "cat" : null;
+      const optRow = !card ? closest("[data-option-id]") : null;
+      const groupRow = !card && !optRow ? closest("[data-group-id]") : null;
+      const row = !card && !optRow && !groupRow ? closest("[data-cat-id]") : null;
+      const kind = card ? "item" : optRow ? "option" : groupRow ? "group" : row ? "cat" : null;
       if (!kind) return;
-      const el = card || row;
-      const id = card ? card.dataset.itemId : row.dataset.catId;
-      const cat = card ? card.dataset.cat : "";
+      const el = card || optRow || groupRow || row;
+      const id = card ? card.dataset.itemId : optRow ? optRow.dataset.optionId : groupRow ? groupRow.dataset.groupId : row.dataset.catId;
+      const cat = card ? card.dataset.cat : optRow ? optRow.dataset.groupId : "";
       const label = el.dataset.touchLabel || "";
       const timer = setTimeout(() => {
         if (!pendingTouchRef.current) return;
@@ -3481,31 +3513,36 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
     setForm((f) => ({ ...f, addOns: f.addOns.map((g) => (g.id === gid ? { ...g, ...patch } : g)) }));
   };
 
-  // สลับตำแหน่งกลุ่มตัวเลือกเพิ่มขึ้น/ลง — ลำดับนี้คือลำดับที่ลูกค้าเห็นตอนเลือกท็อปปิ้งจริง
-  const moveGroup = (gid, dir) => {
+  // ลากกลุ่มตัวเลือกเพิ่มไปปล่อยบนกลุ่มอื่น — ย้ายไปแทรกตรงตำแหน่งนั้น (ลำดับนี้คือลำดับที่ลูกค้าเห็นจริงตอนเลือกท็อปปิ้ง)
+  const reorderGroup = (srcId, targetId) => {
+    if (!srcId || srcId === targetId) return;
     setForm((f) => {
       const list = f.addOns;
-      const idx = list.findIndex((g) => g.id === gid);
-      const j = idx + dir;
-      if (idx < 0 || j < 0 || j >= list.length) return f;
+      const from = list.findIndex((g) => g.id === srcId);
+      const to = list.findIndex((g) => g.id === targetId);
+      if (from < 0 || to < 0) return f;
       const next = [...list];
-      [next[idx], next[j]] = [next[j], next[idx]];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
       return { ...f, addOns: next };
     });
   };
+  const dropGroup = (targetId) => reorderGroup(dragGroup, targetId);
 
-  // สลับตำแหน่งตัวเลือกย่อยขึ้น/ลงภายในกลุ่มเดียวกัน (ข้ามกลุ่มไม่ได้)
-  const moveOption = (gid, oid, dir) => {
+  // ลากตัวเลือกย่อยไปปล่อยบนตัวเลือกอื่น — ย้ายได้เฉพาะภายในกลุ่มเดียวกัน (ข้ามกลุ่มไม่ได้ ราคาเท่ากันก็จัดลำดับเองได้)
+  const dropOption = (src, dst) => {
+    if (!src || !dst || src.id === dst.id || src.gid !== dst.gid) return;
     setForm((f) => ({
       ...f,
       addOns: f.addOns.map((g) => {
-        if (g.id !== gid) return g;
+        if (g.id !== src.gid) return g;
         const list = g.options || [];
-        const idx = list.findIndex((o) => o.id === oid);
-        const j = idx + dir;
-        if (idx < 0 || j < 0 || j >= list.length) return g;
+        const from = list.findIndex((o) => o.id === src.id);
+        const to = list.findIndex((o) => o.id === dst.id);
+        if (from < 0 || to < 0) return g;
         const next = [...list];
-        [next[idx], next[j]] = [next[j], next[idx]];
+        const [moved] = next.splice(from, 1);
+        next.splice(to, 0, moved);
         return { ...g, options: next };
       }),
     }));
@@ -4240,36 +4277,38 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                   </p>
                 )}
                 <div className="space-y-2.5 mb-2">
-                  {form.addOns.map((g, gIdx) => (
+                  {form.addOns.map((g) => (
                     <div
                       key={g.id}
-                      style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
-                      className="rounded-xl p-3 space-y-2.5"
+                      data-group-id={g.id}
+                      data-touch-label={g.name || "กลุ่มตัวเลือก"}
+                      draggable
+                      onDragStart={(e) => {
+                        setDragGroup(g.id);
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setDragImage(makeDragImage(g.name || "กลุ่มตัวเลือก"), 12, 12);
+                      }}
+                      onDragEnd={() => { setDragGroup(null); setOverGroup(null); }}
+                      onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (overGroup !== g.id) setOverGroup(g.id); }}
+                      onDragLeave={(e) => {
+                        if (e.currentTarget.contains(e.relatedTarget)) return;
+                        const leaveId = e.currentTarget.dataset.groupId;
+                        setOverGroup((o) => (o === leaveId ? null : o));
+                      }}
+                      onDrop={(e) => { e.preventDefault(); reorderGroup(dragGroup, g.id); setDragGroup(null); setOverGroup(null); }}
+                      style={{
+                        background: "#FFFFFF",
+                        border: `1px solid ${overGroup === g.id && dragGroup && dragGroup !== g.id ? COLORS.caramel : COLORS.line}`,
+                        opacity: dragGroup === g.id ? 0.4 : 1,
+                        cursor: "grab",
+                      }}
+                      className="rounded-xl p-3 space-y-2.5 transition-all"
                     >
-                      {/* หัวกลุ่ม: ปุ่มสลับลำดับกลุ่ม + ชื่อ + ปุ่มบังคับเลือก + ลบกลุ่ม */}
+                      {/* หัวกลุ่ม: ลากทั้งแถวนี้เพื่อสลับลำดับกลุ่ม (เหมือนลากเมนู/หมวดในหน้าจัดการเมนู) + ชื่อ + ปุ่มบังคับเลือก + ลบกลุ่ม */}
                       <div className="flex items-center gap-2">
-                        <div className="flex flex-col flex-shrink-0 -my-1">
-                          <button
-                            type="button"
-                            onClick={() => moveGroup(g.id, -1)}
-                            disabled={gIdx === 0}
-                            style={{ color: gIdx === 0 ? COLORS.line : COLORS.inkSoft }}
-                            className="leading-none py-0.5"
-                            title="ย้ายกลุ่มนี้ขึ้น"
-                          >
-                            <ChevronUp size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => moveGroup(g.id, 1)}
-                            disabled={gIdx === form.addOns.length - 1}
-                            style={{ color: gIdx === form.addOns.length - 1 ? COLORS.line : COLORS.inkSoft }}
-                            className="leading-none py-0.5"
-                            title="ย้ายกลุ่มนี้ลง"
-                          >
-                            <ChevronDown size={14} />
-                          </button>
-                        </div>
+                        <span style={{ color: COLORS.inkSoft, opacity: 0.6 }} className="flex-shrink-0">
+                          <GripVertical size={16} />
+                        </span>
                         <input
                           value={g.name}
                           onChange={(e) => updateGroup(g.id, { name: e.target.value })}
@@ -4324,38 +4363,54 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                           {confirmDelGroup === g.id ? <span className="text-[9px] font-bold px-1">ยืนยัน?</span> : <Trash2 size={14} />}
                         </button>
                       </div>
-                      {/* ตัวเลือกย่อยในกลุ่ม — แต่ละตัวแก้ชื่อ/ราคา/ต้นทุน + ผูกวัตถุดิบได้ + สลับลำดับได้ */}
+                      {/* ตัวเลือกย่อยในกลุ่ม — แต่ละตัวแก้ชื่อ/ราคา/ต้นทุน + ผูกวัตถุดิบได้ + ลากสลับลำดับได้ (ย้ายข้ามกลุ่มไม่ได้) */}
                       {g.options && g.options.length > 0 ? (
                         <div className="space-y-1.5">
-                          {g.options.map((o, oIdx) => (
+                          {g.options.map((o) => (
                             <div
                               key={o.id}
-                              style={{ background: COLORS.paper }}
-                              className="rounded-lg px-3 py-2"
+                              data-option-id={o.id}
+                              data-group-id={g.id}
+                              data-touch-label={o.name || "ตัวเลือก"}
+                              draggable
+                              onDragStart={(e) => {
+                                e.stopPropagation(); // กันไม่ให้ event ทะลุขึ้นไปโดนแถวหัวกลุ่มด้านนอกจับเป็นลากกลุ่ม
+                                setDragOption({ id: o.id, gid: g.id });
+                                e.dataTransfer.effectAllowed = "move";
+                                e.dataTransfer.setDragImage(makeDragImage(o.name || "ตัวเลือก"), 12, 12);
+                              }}
+                              onDragEnd={(e) => { e.stopPropagation(); setDragOption(null); setOverOption(null); }}
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                e.dataTransfer.dropEffect = "move";
+                                if (!overOption || overOption.id !== o.id) setOverOption({ id: o.id, gid: g.id });
+                              }}
+                              onDragLeave={(e) => {
+                                e.stopPropagation();
+                                if (e.currentTarget.contains(e.relatedTarget)) return;
+                                const leaveId = e.currentTarget.dataset.optionId;
+                                setOverOption((op) => (op && op.id === leaveId ? null : op));
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                if (dragOption) dropOption(dragOption, { id: o.id, gid: g.id });
+                                setDragOption(null);
+                                setOverOption(null);
+                              }}
+                              style={{
+                                background: COLORS.paper,
+                                border: `1px solid ${overOption && overOption.id === o.id && dragOption && dragOption.id !== o.id && dragOption.gid === g.id ? COLORS.caramel : "transparent"}`,
+                                opacity: dragOption && dragOption.id === o.id ? 0.4 : 1,
+                                cursor: "grab",
+                              }}
+                              className="rounded-lg px-3 py-2 transition-all"
                             >
                               <div className="flex items-center gap-2">
-                                <div className="flex flex-col flex-shrink-0 -my-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => moveOption(g.id, o.id, -1)}
-                                    disabled={oIdx === 0}
-                                    style={{ color: oIdx === 0 ? COLORS.line : COLORS.inkSoft }}
-                                    className="leading-none py-0.5"
-                                    title="ย้ายตัวเลือกนี้ขึ้น"
-                                  >
-                                    <ChevronUp size={12} />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => moveOption(g.id, o.id, 1)}
-                                    disabled={oIdx === g.options.length - 1}
-                                    style={{ color: oIdx === g.options.length - 1 ? COLORS.line : COLORS.inkSoft }}
-                                    className="leading-none py-0.5"
-                                    title="ย้ายตัวเลือกนี้ลง"
-                                  >
-                                    <ChevronDown size={12} />
-                                  </button>
-                                </div>
+                                <span style={{ color: COLORS.inkSoft, opacity: 0.6 }} className="flex-shrink-0">
+                                  <GripVertical size={14} />
+                                </span>
                                 <input
                                   value={o.name}
                                   onChange={(e) => updateOption(g.id, o.id, { name: e.target.value })}
