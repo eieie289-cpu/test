@@ -3390,6 +3390,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
       const kind = card ? "item" : optRow ? "option" : groupRow ? "group" : row ? "cat" : null;
       if (!kind) return;
       const el = card || optRow || groupRow || row;
+      if (el.dataset.noDrag) return; // มีอันเดียวในกลุ่ม/ทั้งฟอร์ม ไม่มีที่ให้ลากสลับตำแหน่งด้วย
       const id = card ? card.dataset.itemId : optRow ? optRow.dataset.optionId : groupRow ? groupRow.dataset.groupId : row.dataset.catId;
       const cat = card ? card.dataset.cat : optRow ? optRow.dataset.groupId : "";
       const label = el.dataset.touchLabel || "";
@@ -4282,7 +4283,8 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                       key={g.id}
                       data-group-id={g.id}
                       data-touch-label={g.name || "กลุ่มตัวเลือก"}
-                      draggable
+                      data-no-drag={form.addOns.length <= 1 ? "1" : undefined}
+                      draggable={form.addOns.length > 1}
                       onDragStart={(e) => {
                         setDragGroup(g.id);
                         e.dataTransfer.effectAllowed = "move";
@@ -4300,15 +4302,12 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                         background: "#FFFFFF",
                         border: `1px solid ${overGroup === g.id && dragGroup && dragGroup !== g.id ? COLORS.caramel : COLORS.line}`,
                         opacity: dragGroup === g.id ? 0.4 : 1,
-                        cursor: "grab",
+                        cursor: form.addOns.length > 1 ? "grab" : "default",
                       }}
                       className="rounded-xl p-3 space-y-2.5 transition-all"
                     >
                       {/* หัวกลุ่ม: ลากทั้งแถวนี้เพื่อสลับลำดับกลุ่ม (เหมือนลากเมนู/หมวดในหน้าจัดการเมนู) + ชื่อ + ปุ่มบังคับเลือก + ลบกลุ่ม */}
                       <div className="flex items-center gap-2">
-                        <span style={{ color: COLORS.inkSoft, opacity: 0.6 }} className="flex-shrink-0">
-                          <GripVertical size={16} />
-                        </span>
                         <input
                           value={g.name}
                           onChange={(e) => updateGroup(g.id, { name: e.target.value })}
@@ -4372,7 +4371,8 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                               data-option-id={o.id}
                               data-group-id={g.id}
                               data-touch-label={o.name || "ตัวเลือก"}
-                              draggable
+                              data-no-drag={g.options.length <= 1 ? "1" : undefined}
+                              draggable={g.options.length > 1}
                               onDragStart={(e) => {
                                 e.stopPropagation(); // กันไม่ให้ event ทะลุขึ้นไปโดนแถวหัวกลุ่มด้านนอกจับเป็นลากกลุ่ม
                                 setDragOption({ id: o.id, gid: g.id });
@@ -4403,14 +4403,11 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                                 background: COLORS.paper,
                                 border: `1px solid ${overOption && overOption.id === o.id && dragOption && dragOption.id !== o.id && dragOption.gid === g.id ? COLORS.caramel : "transparent"}`,
                                 opacity: dragOption && dragOption.id === o.id ? 0.4 : 1,
-                                cursor: "grab",
+                                cursor: g.options.length > 1 ? "grab" : "default",
                               }}
                               className="rounded-lg px-3 py-2 transition-all"
                             >
                               <div className="flex items-center gap-2">
-                                <span style={{ color: COLORS.inkSoft, opacity: 0.6 }} className="flex-shrink-0">
-                                  <GripVertical size={14} />
-                                </span>
                                 <input
                                   value={o.name}
                                   onChange={(e) => updateOption(g.id, o.id, { name: e.target.value })}
