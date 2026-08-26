@@ -9457,18 +9457,25 @@ function App() {
     // อัปเดต state ท้องถิ่นทันที (optimistic) — UI ตอบสนองไว ไม่ต้องรอ Firestore รอบกลับ
     // แล้วค่อยซิงก์ขึ้น Firestore ด้านหลัง (บนเครื่องที่มีสิทธิ์ อีกสักครู่ Firestore จะยืนยันสถานะเดียวกันอีกที)
     setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: next } : o)));
-    // หักสต็อกอัตโนมัติตอนออเดอร์ทำเสร็จ (ใหม่ → กำลังทำ → เสร็จแล้ว) — ตามสูตรวัตถุดิบที่ผูกไว้กับเมนู
-    // เฉพาะตอนเพิ่งเสร็จครั้งแรก (preparing → done) — ย้อนกลับจาก delivered → done จะไม่หักซ้ำ
-    // ออเดอร์ที่ได้ของสำเร็จรูปมา (goodsFromOrderId) จะไม่หักซ้ำ — ของอีกใบตัดสต็อกไปแล้ว
-    if (next === "done" && order.status === "preparing" && !order.goodsFromOrderId) {
-      deductStockForOrder(order);
-    }
     if (FIREBASE_SYNC_ENABLED) {
       try {
         await db.collection("orders").doc(id).update({ status: next });
       } catch (err) {
         console.error("Failed to update order status:", err);
+        // เขียนสถานะขึ้น Firestore ไม่สำเร็จ — ต้องดึง state ท้องถิ่นกลับเป็นของเดิม ไม่งั้นเครื่องนี้จะโชว์
+        // สถานะที่ไม่ตรงกับความจริงค้างอยู่ (เช่น โชว์ "เสร็จแล้ว" ทั้งที่ Firestore ยังเป็น "กำลังทำ")
+        // ซึ่งถ้าปล่อยไว้ อีกเครื่องนึงจะกดเสร็จซ้ำได้อีกรอบ กลายเป็นหักสต็อกซ้ำสองครั้งจากออร์เดอร์เดียว
+        setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: order.status } : o)));
+        return;
       }
+    }
+    // หักสต็อกอัตโนมัติตอนออเดอร์ทำเสร็จ (ใหม่ → กำลังทำ → เสร็จแล้ว) — ตามสูตรวัตถุดิบที่ผูกไว้กับเมนู
+    // เฉพาะตอนเพิ่งเสร็จครั้งแรก (preparing → done) — ย้อนกลับจาก delivered → done จะไม่หักซ้ำ
+    // ออเดอร์ที่ได้ของสำเร็จรูปมา (goodsFromOrderId) จะไม่หักซ้ำ — ของอีกใบตัดสต็อกไปแล้ว
+    // ทำ "หลัง" จากที่สถานะบันทึกขึ้น Firestore สำเร็จแล้วเท่านั้น (ดูคอมเมนต์ข้างบน — กันหักสต็อกไปแล้ว
+    // แต่สถานะไม่ได้บันทึกจริง ทำให้เครื่องอื่นกดซ้ำแล้วหักซ้ำได้อีก)
+    if (next === "done" && order.status === "preparing" && !order.goodsFromOrderId) {
+      deductStockForOrder(order);
     }
   };
 
@@ -9489,6 +9496,9 @@ function App() {
         await db.collection("orders").doc(id).update({ status: "cancelled", cancelReason, cancelledAt, cancelledFrom });
       } catch (err) {
         console.error("Failed to cancel order:", err);
+        // บันทึกไม่สำเร็จ — ดึงสถานะท้องถิ่นกลับ ไม่งั้นเครื่องนี้จะโชว์ว่า "ยกเลิกแล้ว" ทั้งที่จริง Firestore
+        // ยังเป็นสถานะเดิมอยู่ (เครื่องอื่นจะยังเห็นเป็นออร์เดอร์ปกติ ทำให้พนักงานสับสนว่าตกลงยกเลิกจริงไหม)
+        setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: cancelledFrom, cancelReason: "", cancelledAt: null, cancelledFrom: "" } : o)));
       }
     }
   };
@@ -9509,6 +9519,13 @@ function App() {
         await db.collection("orders").doc(id).update({ status: next, cancelReason: "", cancelledFrom: "", completedAt });
       } catch (err) {
         console.error("Failed to revive cancelled order:", err);
+        // บันทึกไม่สำเร็จ — ดึงกลับเป็น "ยกเลิกแล้ว" เหมือนเดิม ไม่งั้นเครื่องนี้จะโชว์ว่า "รับของแล้ว/จัดส่งแล้ว"
+        // ทั้งที่ Firestore ยังเป็นสถานะยกเลิกอยู่ พนักงานอาจเข้าใจผิดว่านับยอดขายไปแล้วทั้งที่จริงยังไม่ได้นับ
+        if (order) {
+          setOrders((prev) =>
+            prev.map((o) => (o.id === id ? { ...o, status: "cancelled", cancelReason: order.cancelReason || "", cancelledFrom: order.cancelledFrom || "", completedAt: order.completedAt || null } : o))
+          );
+        }
       }
     }
   };
@@ -9531,8 +9548,12 @@ function App() {
     );
     if (FIREBASE_SYNC_ENABLED) {
       try {
-        await db.collection("orders").doc(id).update({ goodsUsedByOrderId: targetId });
-        await db.collection("orders").doc(targetId).update({ goodsFromOrderId: id });
+        // เขียนพร้อมกันเป็น batch (atomic) — กันกรณีเขียนใบแรกสำเร็จแต่ใบสองพลาด (เช่นเน็ตหลุดกลางคัน)
+        // ซึ่งจะทำให้ Firestore มีป้ายเชื่อมแค่ฝั่งเดียว (A ชี้ไป B แต่ B ไม่ชี้กลับมา A) ข้อมูลไม่ตรงกัน
+        const batch = db.batch();
+        batch.update(db.collection("orders").doc(id), { goodsUsedByOrderId: targetId });
+        batch.update(db.collection("orders").doc(targetId), { goodsFromOrderId: id });
+        await batch.commit();
       } catch (err) {
         console.error("Failed to transfer goods:", err);
         // เขียน Firestore ไม่สำเร็จ — ย้อนป้ายกลับในเครื่องให้ตรงกับระบบจริง แล้วแจ้งให้ลองใหม่
@@ -9576,14 +9597,12 @@ function App() {
     );
     if (FIREBASE_SYNC_ENABLED) {
       try {
-        await db
-          .collection("orders")
-          .doc(id)
-          .update({ goodsUsedByOrderId: firebase.firestore.FieldValue.delete() });
-        await db
-          .collection("orders")
-          .doc(targetId)
-          .update({ goodsFromOrderId: firebase.firestore.FieldValue.delete() });
+        // เขียนพร้อมกันเป็น batch (atomic) — เหตุผลเดียวกับ transferGoods ข้างบน กันลบป้ายฝั่งเดียวสำเร็จ
+        // แต่อีกฝั่งพลาด ทำให้ Firestore มีข้อมูลไม่ตรงกันระหว่าง 2 ออร์เดอร์
+        const batch = db.batch();
+        batch.update(db.collection("orders").doc(id), { goodsUsedByOrderId: firebase.firestore.FieldValue.delete() });
+        batch.update(db.collection("orders").doc(targetId), { goodsFromOrderId: firebase.firestore.FieldValue.delete() });
+        await batch.commit();
       } catch (err) {
         console.error("Failed to undo goods transfer:", err);
         // เขียน Firestore ไม่สำเร็จ — เอาป้ายกลับคืนให้ตรงกับระบบจริง แล้วแจ้งให้ลองใหม่
@@ -9623,7 +9642,12 @@ function App() {
       db.collection("orders")
         .doc(id)
         .update({ paid: true })
-        .catch((err) => console.error("บันทึกสถานะจ่ายเงินไม่สำเร็จ:", err));
+        .catch((err) => {
+          console.error("บันทึกสถานะจ่ายเงินไม่สำเร็จ:", err);
+          // เขียนไม่สำเร็จ — ดึงสถานะกลับเป็น "ยังไม่จ่าย" ไม่งั้นแดชบอร์ดยอดขาย/เงินสดในลิ้นชักของเครื่องนี้
+          // จะนับออร์เดอร์นี้รวมไปแล้วทั้งที่ Firestore ยังไม่ได้บันทึกจริง ตัวเลขจะไม่ตรงกับความเป็นจริง
+          setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, paid: false } : o)));
+        });
     }
   };
 
@@ -9639,7 +9663,12 @@ function App() {
       db.collection("orders")
         .doc(id)
         .update({ paid: false, collectOnDelivery: restoreCollect })
-        .catch((err) => console.error("ย้อนกลับสถานะจ่ายเงินไม่สำเร็จ:", err));
+        .catch((err) => {
+          console.error("ย้อนกลับสถานะจ่ายเงินไม่สำเร็จ:", err);
+          // เขียนไม่สำเร็จ — ดึงกลับเป็น "จ่ายแล้ว" เหมือนเดิม กันแดชบอร์ดของเครื่องนี้แสดงว่ายังไม่จ่าย
+          // ทั้งที่ Firestore ยังนับว่าจ่ายแล้วอยู่ (สลับกับกรณี markOrderPaid ด้านบน)
+          setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, paid: true, collectOnDelivery: order.collectOnDelivery } : o)));
+        });
     }
   };
 
@@ -9648,6 +9677,7 @@ function App() {
   const deleteOrdersByIds = async (ids) => {
     const list = Array.isArray(ids) ? ids : [ids];
     if (list.length === 0) return;
+    const removed = orders.filter((o) => list.includes(o.id)); // เก็บของเดิมไว้เผื่อต้องคืนกลับ
     setOrders((prev) => prev.filter((o) => !list.includes(o.id)));
     if (FIREBASE_SYNC_ENABLED) {
       try {
@@ -9656,6 +9686,9 @@ function App() {
         await batch.commit();
       } catch (err) {
         console.error("Failed to delete orders:", err);
+        // ลบไม่สำเร็จ — เอาออร์เดอร์ที่หายไปกลับคืนมา ไม่งั้นเครื่องนี้จะมองไม่เห็นออร์เดอร์เหล่านี้อีกเลย
+        // ทั้งที่ยังอยู่ใน Firestore จริง (เครื่องอื่นยังเห็นปกติ) จนกว่าจะมีอะไรอื่นเปลี่ยนแปลงใน collection
+        setOrders((prev) => [...prev, ...removed]);
       }
     }
   };
