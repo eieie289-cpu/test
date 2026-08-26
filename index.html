@@ -86,6 +86,7 @@ function ChevronRight(props) { return (<IconBase {...props}><polyline points="9 
 function ChevronUp(props) { return (<IconBase {...props}><polyline points="18 15 12 9 6 15" /></IconBase>); }
 function ChevronDown(props) { return (<IconBase {...props}><polyline points="6 9 12 15 18 9" /></IconBase>); }
 function GripVertical(props) { return (<IconBase {...props}><circle cx="9" cy="6" r="1.3" fill="currentColor" stroke="none" /><circle cx="9" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="9" cy="18" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="6" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="18" r="1.3" fill="currentColor" stroke="none" /></IconBase>); }
+function RefreshCw(props) { return (<IconBase {...props}><path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-9-9 9 9 0 0 1 9-9 9 9 0 0 1 7.5 4" /><polyline points="21 3 21 8 16 8" /></IconBase>); }
 function Pencil(props) { return (<IconBase {...props}><path d="M4 20l4-1 11-11-3-3L5 16l-1 4z" /><line x1="14" y1="6" x2="17" y2="9" /></IconBase>); }
 function Trash2(props) { return (<IconBase {...props}><polyline points="4 7 20 7" /><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /><path d="M9 7V4h6v3" /></IconBase>); }
 function Clock(props) { return (<IconBase {...props}><circle cx="12" cy="12" r="8" /><polyline points="12 8 12 12 15 14" /></IconBase>); }
@@ -1276,7 +1277,7 @@ function SheetLock() {
 }
 
 // ================= CUSTOMER VIEW =================
-function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, promos, shopName, shopSlogan, categories, shopHours }) {
+function CustomerView({ menu, cart, setCart, onCheckout, onCheckOrders, shopOpen, menuLoaded, promos, shopName, shopSlogan, categories, shopHours }) {
   const [openCat, setOpenCat] = useState("all");
   const [showCart, setShowCart] = useState(false);
   const [noteOpenFor, setNoteOpenFor] = useState(null);
@@ -1428,13 +1429,16 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
     setCart((prev) => prev.filter((c) => c.cartId !== cartId));
   };
 
-  const total = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
+  // ปัดยอดรวมตะกร้าให้สะอาดก่อนใช้ตัดสินใจ/คำนวณต่อ — ไม่ใช่แค่เรื่องโชว์ผล เพราะ total ใช้เทียบ >=
+  // กับเกณฑ์ "ซื้อครบ" ด้วย ถ้ามีเศษ float ตกค้าง (เช่น 299.99999999999994 แทนที่จะเป็น 300 พอดี)
+  // ลูกค้าอาจไม่ได้รับส่วนลดที่ควรจะได้ทั้งที่ยอดจริงถึงเกณฑ์แล้ว
+  const total = Math.round(cart.reduce((sum, c) => sum + c.price * c.qty, 0) * 100) / 100;
   const cartCount = cart.reduce((sum, c) => sum + c.qty, 0);
   // โปรโมชั่น "ซื้อครบ" — คำนวณอัตโนมัติจากยอดรวมตะกร้า (ลูกค้าไม่ต้องทำอะไร)
   const thresholdPromo = (promos || []).find((p) => p && p.active && p.type === "threshold");
   const thresholdMet = !!thresholdPromo && total >= (Number(thresholdPromo.minSpend) || 0);
   const thresholdBaht = thresholdMet ? Math.min(Number(thresholdPromo.discountBaht) || 0, total) : 0;
-  const displayTotal = total - thresholdBaht;
+  const displayTotal = Math.round((total - thresholdBaht) * 100) / 100;
 
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="relative">
@@ -1443,6 +1447,15 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
         style={{ background: COLORS.caramel }}
         className="px-5 pt-6 pb-8 rounded-b-[28px] text-center relative overflow-hidden"
       >
+        {onCheckOrders && (
+          <button
+            onClick={onCheckOrders}
+            style={{ color: "#FFF9F0", background: "rgba(0,0,0,0.15)" }}
+            className="absolute top-4 right-4 z-10 text-[11px] font-semibold px-2.5 py-1.5 rounded-full inline-flex items-center gap-1"
+          >
+            <Clock size={12} /> ออร์เดอร์ของฉัน
+          </button>
+        )}
         <div
           style={{ background: COLORS.peach, opacity: 0.25 }}
           className="absolute -top-10 -right-10 w-40 h-40 rounded-full"
@@ -1982,6 +1995,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
   const [custDeliveryTime, setCustDeliveryTime] = useState("");
   const [custError, setCustError] = useState(false);
   const [phoneError, setPhoneError] = useState(false); // เบอร์โทรไม่ถูกต้อง (ต้อง 10 หลัก ขึ้นต้น 0)
+  const [deliveryTimeExpiredError, setDeliveryTimeExpiredError] = useState(false); // เวลาที่เคยเลือกไว้ผ่านไปแล้วจริง ๆ ตอนกดยืนยัน
   const custFormRef = useRef(null);
   const dateOptions = useMemo(() => upcomingDateOptions(7), []);
   // เวลาปัจจุบัน (อัปเดตทุก 30 วินาที) — วันนี้จะปัดช่วงเวลาที่ผ่านไปแล้วออกจากตัวเลือก
@@ -2012,7 +2026,9 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
   const [appliedPromo, setAppliedPromo] = useState(null);
   const [promoError, setPromoError] = useState(""); // ข้อความ error ของโค้ดส่วนลด ("" = ไม่มี) — เช่น ใช้ครบแล้ว / 1 ครั้งต่อคน
   const [bringCup, setBringCup] = useState(false); // ลูกค้าติ๊ก "นำแก้วมาเอง" เพื่อรับส่วนลด
-  const subtotal = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
+  // ปัดยอดรวมตะกร้าให้สะอาดตั้งแต่ต้นทาง — ใช้เทียบ >= กับเกณฑ์ "ซื้อครบ" ด้วย (เดียวกับที่แก้ใน CustomerView)
+  // ถ้าไม่ปัด อาจมีเศษ float ตกค้าง (299.99999999999994 แทนที่จะเป็น 300 พอดี) ทำให้ปฏิเสธส่วนลดที่ควรได้
+  const subtotal = Math.round(cart.reduce((sum, c) => sum + c.price * c.qty, 0) * 100) / 100;
   // โปรโมชั่น "นำแก้วมาเอง" ที่เปิดใช้ — ลูกค้าติ๊กในหน้าชำระเงินเพื่อรับส่วนลด
   // รองรับทั้งโปรเก่า (type: byoc) และโปรตัวต่อ (เงื่อนไข byoc)
   const byocPromo = (promos || []).find(
@@ -2141,6 +2157,10 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
   };
 
   const handleConfirm = () => {
+    // กันกดซ้ำ/แตะรัว ๆ (นิ้วสัมผัสจอสองครั้งไว หรือเน็ตช้าแล้วกดซ้ำ) — ไม่งั้นจะยิง onPaid สองรอบ
+    // กลายเป็นสร้างออร์เดอร์ซ้ำสองใบทั้งที่ลูกค้าตั้งใจสั่งแค่ครั้งเดียว (เดิมมีแค่เส้นทางแนบสลิปที่กันไว้
+    // เส้นทางเงินสด/เก็บปลายทางไม่เคยกันเลย เพราะยิง onPaid ทันทีแบบไม่ตั้ง paying ก่อน)
+    if (paying) return;
     const isPickup = deliveryMethod === "pickup";
     // รับที่ร้าน: ต้องกรอกชื่อเท่านั้น — จัดส่ง: ต้องกรอกชื่อ+บ้านเลขที่ และถ้าเลือกส่งล่วงหน้าต้องเลือกวันเวลาด้วย
     const missing =
@@ -2149,9 +2169,19 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
       (!isPickup && (!custHouseNo.trim() || (!deliveryNow && (!custDeliveryDate || !custDeliveryTime))));
     // ตรวจรูปแบบเบอร์โทรด้วย (10 หลัก ขึ้นต้น 0) — กันเบอร์ปลอม/พิมพ์ผิด
     const badPhone = !isValidPhone(custPhone);
-    if (missing || badPhone) {
+    // เผื่อกรณีขอบสุด ๆ: ลูกค้าเลือก "วันนี้" + ช่วงเวลาไว้ตั้งแต่แรก แล้วกรอกฟอร์มอยู่นานจนเวลาที่เลือกผ่านไปแล้วจริง ๆ
+    // (หรือข้ามเที่ยงคืนพอดี ทำให้ "วันนี้" ที่เลือกไว้กลายเป็นเมื่อวานไปแล้ว) — เช็คซ้ำอีกทีตอนจะยืนยันจริง
+    // ไม่ใช่เชื่อแค่ตอนเลือกตอนแรกอย่างเดียว กันส่งออร์เดอร์ที่ขอเวลาส่งที่ผ่านไปแล้วเข้าคิวพนักงาน
+    const deliveryTimePassed =
+      !isPickup && !deliveryNow && custDeliveryDate && custDeliveryTime && custDeliveryDate === todayKey() && custDeliveryTime <= nowStr;
+    if (missing || badPhone || deliveryTimePassed) {
       setCustError(true);
       setPhoneError(badPhone);
+      setDeliveryTimeExpiredError(deliveryTimePassed);
+      if (deliveryTimePassed) {
+        // เวลาที่เคยเลือกไว้ผ่านไปแล้วจริง ๆ — เคลียร์ให้เลือกใหม่ จะได้ไม่กดยืนยันซ้ำแล้วเจอ error เดิมวนไป
+        setCustDeliveryTime("");
+      }
       // เลื่อนจอไปที่ฟอร์มชื่อ/บ้านเลขที่/เวลาจัดส่ง ให้ลูกค้าเห็นทันทีว่าลืมกรอกตรงไหน
       if (custFormRef.current) {
         custFormRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -2160,6 +2190,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
     }
     setCustError(false);
     setPhoneError(false);
+    setDeliveryTimeExpiredError(false);
     const customer = {
       name: custName.trim(),
       phone: custPhone.trim(),
@@ -2171,19 +2202,29 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
     };
     if (isCash) {
       // เงินสด = เก็บเงินตอนรับของ (คนส่ง/หน้าร้านเก็บ) — ไม่ต้องแนบสลิป
-      onPaid(method, null, customer, getDiscount(), true);
+      // ตั้ง paying ทันทีเหมือนเส้นทางแนบสลิป — ปุ่มจะ disabled ทันทีที่กด กันแตะซ้ำสร้างออร์เดอร์สองใบ
+      // ถ้าบันทึกไม่สำเร็จ (onPaid คืนค่า null) ต้องปลด paying คืน ไม่งั้นลูกค้าจะกดสั่งใหม่ไม่ได้เลย
+      // (สำเร็จไม่ต้องปลดคืน เพราะหน้านี้จะเปลี่ยนไปหน้า "สำเร็จ" แล้ว ทำให้คอมโพเนนต์นี้ unmount ไปเอง)
+      setPaying(true);
+      Promise.resolve(onPaid(method, null, customer, getDiscount(), true)).then((result) => {
+        if (!result) setPaying(false);
+      });
       return;
     }
     if (collectOnDelivery) {
       // เลือก "เก็บปลายทาง" = ยังไม่ต้องโอนตอนนี้ จ่ายตอนรับของ — ไม่ต้องแนบสลิป
-      onPaid(method, null, customer, getDiscount(), true);
+      setPaying(true);
+      Promise.resolve(onPaid(method, null, customer, getDiscount(), true)).then((result) => {
+        if (!result) setPaying(false);
+      });
       return;
     }
     if (!slipImg) return;
     setPaying(true);
     setTimeout(() => {
-      setPaying(false);
-      onPaid(method, { url: slipImg.url, dataUrl: slipImg.dataUrl }, customer, getDiscount(), false);
+      Promise.resolve(onPaid(method, { url: slipImg.url, dataUrl: slipImg.dataUrl }, customer, getDiscount(), false)).then((result) => {
+        if (!result) setPaying(false);
+      });
     }, 400);
   };
 
@@ -2473,6 +2514,8 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
           <p className="text-xs" style={{ color: "#C0533F" }}>
             {phoneError
               ? "เบอร์โทรไม่ถูกต้อง — ต้องเป็นเบอร์ 10 หลัก ขึ้นต้น 0 เช่น 081-234-5678"
+              : deliveryTimeExpiredError
+              ? "ช่วงเวลาที่เลือกไว้ผ่านไปแล้ว (ตอนนี้ " + nowStr + " น.) — กรุณาเลือกช่วงเวลาใหม่"
               : deliveryMethod === "pickup"
               ? "กรุณากรอกชื่อและเบอร์โทรติดต่อกลับก่อนยืนยัน"
               : deliveryNow
@@ -2831,7 +2874,7 @@ function drawOrderReceipt(order, shopName) {
 }
 
 
-function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order, shopName }) {
+function OrderSuccessView({ orderNo, customer, onNewOrder, onCheckOrders, paymentMethod, order, shopName }) {
   const [receiptState, setReceiptState] = useState(""); // "" | "saving" | "error"
   const [receiptImg, setReceiptImg] = useState(null); // dataUrl ภาพหลักฐานที่สร้างแล้ว — เปิดหน้าต่างให้เลือกบันทึก/แชร์
   const [savedNow, setSavedNow] = useState(false); // เพิ่งกดบันทึกลงเครื่อง
@@ -2935,6 +2978,11 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order,
       <button onClick={onNewOrder} style={{ color: COLORS.caramelDark }} className="text-sm font-semibold underline underline-offset-4 mt-4">
         สั่งเพิ่มอีก
       </button>
+      {onCheckOrders && (
+        <button onClick={onCheckOrders} style={{ color: COLORS.inkSoft }} className="text-xs font-medium underline underline-offset-4 mt-2">
+          เช็คสถานะออร์เดอร์ของฉัน
+        </button>
+      )}
 
       {receiptImg && (
         <div
@@ -2985,7 +3033,135 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order,
   );
 }
 
-// ================= MENU MANAGER (staff) =================
+// ================= MY ORDERS (customer — เช็คสถานะออร์เดอร์ย้อนหลัง) =================
+// ออกแบบให้ประหยัด Firestore read ที่สุด: ไม่มี live listener ค้างไว้ตลอด — อ่านทีเดียวตอนเปิดหน้า/กดรีเฟรชเท่านั้น
+// (ลูกค้าทั่วไปกดเช็คแค่ 1-2 ครั้งต่อออร์เดอร์ ไม่ได้ต้องการอัปเดตแบบเรียลไทม์ตลอดเวลา)
+function MyOrdersView({ onBack }) {
+  const [orderDocs, setOrderDocs] = useState([]); // [{id, data|null, error}] — data null ถ้ายังไม่โหลด/หาไม่เจอ
+  const [loading, setLoading] = useState(true);
+
+  const statusMeta = {
+    new: { label: "ได้รับออร์เดอร์แล้ว", color: COLORS.caramel, bg: COLORS.peachSoft },
+    preparing: { label: "กำลังทำ", color: "#B08628", bg: "#F5EAC9" },
+    done: { label: "พร้อมแล้ว — รอจัดส่ง", color: COLORS.sage, bg: COLORS.sageSoft },
+    delivered: { label: "จัดส่งสำเร็จแล้ว", color: "#FFFFFF", bg: COLORS.sage },
+    received: { label: "รับสินค้าเรียบร้อยแล้ว", color: "#FFFFFF", bg: COLORS.sage },
+    cancelled: { label: "ออร์เดอร์นี้ถูกยกเลิก", color: "#C0533F", bg: "#F3D9D3" },
+  };
+
+  const loadOrders = () => {
+    let ids = [];
+    try {
+      const raw = localStorage.getItem("freebuff_myOrders");
+      const parsed = raw ? JSON.parse(raw) : [];
+      ids = Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      ids = [];
+    }
+    if (!ids.length || !FIREBASE_SYNC_ENABLED || !db) {
+      setOrderDocs([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    // อ่านทีละใบแบบ .get() ธรรมดา (ไม่ใช่ onSnapshot) — เสีย read ตามจำนวนออร์เดอร์ที่มีจริงครั้งเดียวต่อการกดเช็คหนึ่งรอบ
+    Promise.all(
+      ids.map((id) =>
+        db
+          .collection("orders")
+          .doc(id)
+          .get()
+          .then((doc) => ({ id, data: doc.exists ? doc.data() : null }))
+          .catch(() => ({ id, data: null, error: true }))
+      )
+    ).then((results) => {
+      // เอาเฉพาะที่ยังหาเจอจริง (ใบที่พนักงานลบทิ้งไปแล้วจะหายจากลิสต์เอง) เรียงใหม่สุดก่อน
+      const found = results.filter((r) => r.data);
+      found.sort((a, b) => (b.data.createdAt || 0) - (a.data.createdAt || 0));
+      setOrderDocs(found);
+      setLoading(false);
+      // ซ่อมลิสต์ที่เก็บไว้ — ตัด id ที่หาไม่เจอแล้วออก กันลิสต์บวมด้วยของที่ไม่มีอยู่จริงไปเรื่อย ๆ
+      try {
+        localStorage.setItem("freebuff_myOrders", JSON.stringify(found.map((r) => r.id)));
+      } catch (e) {
+        // no-op
+      }
+    });
+  };
+
+  useEffect(() => {
+    loadOrders();
+  }, []);
+
+  return (
+    <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-4 pt-5 pb-10">
+      <div className="flex items-center gap-2 mb-4">
+        <button onClick={onBack} style={{ color: COLORS.ink }} className="p-1 -ml-1">
+          <ChevronLeft size={22} />
+        </button>
+        <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-xl font-semibold flex-1">
+          ออร์เดอร์ของฉัน
+        </h1>
+        <button
+          onClick={loadOrders}
+          disabled={loading}
+          style={{ color: COLORS.caramelDark }}
+          className="text-xs font-semibold inline-flex items-center gap-1 disabled:opacity-50 px-2 py-1"
+        >
+          {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+          รีเฟรช
+        </button>
+      </div>
+
+      {loading && (
+        <div className="flex flex-col items-center justify-center py-16">
+          <Loader2 size={28} className="animate-spin" style={{ color: COLORS.caramel }} />
+        </div>
+      )}
+
+      {!loading && orderDocs.length === 0 && (
+        <div className="flex flex-col items-center text-center py-16 px-6">
+          <p style={{ color: COLORS.inkSoft }} className="text-sm">
+            ยังไม่มีออร์เดอร์ที่เช็คได้จากเครื่องนี้
+            <br />
+            (เช็คได้เฉพาะออร์เดอร์ที่สั่งจากเครื่อง/เบราว์เซอร์นี้เท่านั้น)
+          </p>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {orderDocs.map(({ id, data: o }) => {
+          const meta = statusMeta[o.status] || statusMeta.new;
+          const total = calcOrderTotal(o);
+          return (
+            <div key={id} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-4">
+              <div className="flex items-center justify-between mb-1.5">
+                <span style={{ color: COLORS.ink }} className="text-sm font-bold">ออร์เดอร์ #{o.orderNo}</span>
+                <span style={{ color: meta.color, background: meta.bg }} className="text-[11px] font-semibold px-2.5 py-1 rounded-full">
+                  {meta.label}
+                </span>
+              </div>
+              <p style={{ color: COLORS.inkSoft }} className="text-xs mb-2">
+                {(o.items || []).map((i) => `${i.name} × ${i.qty}`).join(", ")}
+              </p>
+              {o.status === "cancelled" && o.cancelReason && (
+                <p style={{ color: "#C0533F" }} className="text-xs mb-2">เหตุผล: {o.cancelReason}</p>
+              )}
+              <div className="flex items-center justify-between">
+                <span style={{ color: COLORS.inkSoft }} className="text-[11px]">
+                  {o.method === "pickup" ? "รับที่ร้าน" : o.deliveryDate ? `จัดส่ง ${formatDeliveryDateLabel(o.deliveryDate)} ${o.deliveryTime} น.` : "จัดส่ง"}
+                </span>
+                <span style={{ color: COLORS.caramelDark }} className="text-sm font-bold">฿{fmtBaht(total)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
 function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, onSaveShopInfo, stockItems, categories, updateCategories, promos }) {
   const [editing, setEditing] = useState(null); // item being edited, or "new"
   const [form, setForm] = useState({ name: "", desc: "", price: "", category: "drink", img: "", addOns: [], cost: "", recipe: {} });
@@ -3594,6 +3770,10 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
 
   const save = () => {
     if (!form.name.trim() || !form.price) return;
+    // กันเมนูที่สั่งไม่ได้จริง — กลุ่มตัวเลือกที่ตั้ง "บังคับเลือก" ต้องมีตัวเลือกย่อยอย่างน้อย 1 อัน
+    // ไม่งั้นลูกค้าจะเจอกลุ่มบังคับที่ไม่มีอะไรให้กด กดยืนยันไม่ได้เลย (เจอบั๊กนี้ตอน QA ตะกร้า/เช็คเอาต์)
+    const emptyRequiredGroup = (form.addOns || []).some((g) => g.required && (g.options || []).length === 0);
+    if (emptyRequiredGroup) return;
     const priceNum = Number(form.price);
     // ซ่อม id ซ้ำ (ข้อมูลเก่า) ให้อัตโนมัติก่อนบันทึก — ตัวที่ซ้ำจะได้ id ใหม่ ไม่ชนกันอีก
     const addOns = ensureUniqueAddOnIds(form.addOns);
@@ -4603,6 +4783,14 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
               );
             })()}
 
+            {(form.addOns || []).some((g) => g.required && (g.options || []).length === 0) && (
+              <p style={{ color: "#C0533F" }} className="text-[11px] font-medium mt-2">
+                ⚠ มีกลุ่มตัวเลือกที่ตั้ง "บังคับเลือก" แต่ยังไม่มีตัวเลือกย่อยอยู่เลย (เช่น กลุ่มที่ชื่อ "
+                {(form.addOns || []).find((g) => g.required && (g.options || []).length === 0)?.name || "…"}
+                ") — ลูกค้าจะกดสั่งเมนูนี้ไม่ได้เลย เพิ่มตัวเลือกย่อยอย่างน้อย 1 อัน หรือปิด "บังคับเลือก" ก่อนบันทึก
+              </p>
+            )}
+
             <div className="flex gap-2 mt-4">
               {editing !== "new" && (
                 <button
@@ -4622,7 +4810,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                   <Trash2 size={15} /> {confirmDelMenu ? "กดอีกครั้งเพื่อยืนยัน" : "ลบเมนู"}
                 </button>
               )}
-              <PrimaryButton full onClick={save} disabled={!form.name.trim() || !form.price}>
+              <PrimaryButton full onClick={save} disabled={!form.name.trim() || !form.price || (form.addOns || []).some((g) => g.required && (g.options || []).length === 0)}>
                 บันทึกเมนู
               </PrimaryButton>
             </div>
@@ -8341,7 +8529,61 @@ function App() {
   const [staffMembers, setStaffMembers] = useState([]); // [{ uid, name }] รายชื่อเครื่องพนักงานที่ได้รับสิทธิ์ (staffUids)
   const [menuLoaded, setMenuLoaded] = useState(!FIREBASE_SYNC_ENABLED); // เมนูโหลดจาก Firestore เสร็จแล้วหรือยัง
   const [menuSaveError, setMenuSaveError] = useState(""); // ข้อความเตือนเมื่อบันทึกเมนูขึ้น Firestore ไม่สำเร็จ (เช่น เอกสารเกิน 1MB จากรูปเยอะ) — เดิมเงียบแค่ console.error พนักงานไม่รู้ว่าที่แก้ไปไม่ถูกบันทึกจริง
-  const [cart, setCart] = useState([]);
+  const [cart, setCart] = useState(() => {
+    // โหลดตะกร้าที่ค้างไว้จากรอบก่อน (ถ้ามี) — กันตะกร้าหายตอนลูกค้ารีเฟรชหน้าโดยไม่ตั้งใจระหว่างช้อป
+    try {
+      const raw = localStorage.getItem("freebuff_cart");
+      const parsed = raw ? JSON.parse(raw) : null;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      // localStorage ปิดใช้งาน หรือข้อมูลที่เก็บไว้เสีย/แปลงกลับไม่ได้ — เริ่มตะกร้าใหม่แบบว่างเปล่าไปเลย ไม่ให้พังทั้งหน้า
+      return [];
+    }
+  });
+  // เขียนตะกร้าลง localStorage ทุกครั้งที่เปลี่ยน — ให้รีเฟรชหน้าหรือปิดแท็บแล้วเปิดใหม่ไม่หลุดตะกร้า
+  // (ตะกร้าว่างก็เขียนด้วยตามปกติ เช่นตอนสั่งสำเร็จแล้ว setCart([]) — ครั้งหน้าจะโหลดมาเป็นตะกร้าว่างถูกต้อง)
+  useEffect(() => {
+    try {
+      localStorage.setItem("freebuff_cart", JSON.stringify(cart));
+    } catch (e) {
+      // localStorage เต็มหรือถูกปิดใช้งาน — ข้ามไป ไม่กระทบการช้อปในเซสชันปัจจุบัน แค่รีเฟรชแล้วอาจไม่จำตะกร้า
+    }
+  }, [cart]);
+  // กันตะกร้าที่ค้างจาก localStorage (อาจค้างมาหลายวัน) อ้างอิงเมนูที่ถูกลบไปแล้ว หรือราคาที่เปลี่ยนไปแล้ว
+  // — พอเมนูโหลดเสร็จครั้งแรก เช็คทันที: เมนูไหนหายไปแล้วก็ตัดออกจากตะกร้า เมนูไหนยังอยู่แต่ราคาเปลี่ยน
+  // ก็อัปเดตราคาให้ตรงปัจจุบัน (กันลูกค้าจ่ายราคาเก่าที่ร้านไม่ได้ตั้งใจให้ใช้แล้ว)
+  // ทำครั้งเดียวตอนเมนูโหลดเสร็จเท่านั้น (ไม่ใช่ทุกครั้งที่เมนูเปลี่ยน) ไม่งั้นราคาในตะกร้าจะขยับเองระหว่างที่ลูกค้ากำลังช้อปอยู่
+  const cartReconciledRef = useRef(false);
+  useEffect(() => {
+    if (!menuLoaded || cartReconciledRef.current) return;
+    cartReconciledRef.current = true;
+    setCart((prev) => {
+      if (!prev.length) return prev;
+      const next = prev
+        .map((c) => {
+          const mi = menu.find((m) => m.id === c.menuId);
+          if (!mi || mi.active === false) return null; // เมนูถูกลบหรือถูกปิดขาย (สินค้าหมด) ไปแล้ว — เอาออกจากตะกร้า
+          // ตัวเลือกเพิ่ม/ท็อปปิ้งที่เคยเลือกไว้ อาจถูกลบออกจากเมนูนี้ไปแล้วก็ได้ — เอาตัวที่หายไปออก
+          // ตัวที่ยังอยู่ก็รีเฟรชราคาให้ตรงปัจจุบัน (เผื่อพนักงานแก้ราคาท็อปปิ้งไปด้วยระหว่างที่ตะกร้าค้างอยู่)
+          // normalizeAddOnGroups ก่อน เผื่อเมนูนี้ยังเป็นข้อมูลเก่าแบบ flat-list ที่ไม่เคยถูกแก้ไขผ่านฟอร์มใหม่เลย
+          // (allAddOnOptions อ่านแค่รูปแบบใหม่ตรงๆ ถ้าข้ามขั้นตอนนี้จะเห็นว่าตัวเลือกเก่า "หายไปหมด" ทั้งที่จริงยังอยู่)
+          const liveOptions = allAddOnOptions([{ ...mi, addOns: normalizeAddOnGroups(mi.addOns) }]);
+          const reconciledAddOns = (c.addOns || [])
+            .map((a) => {
+              const live = liveOptions.find((o) => o.id === a.id);
+              return live ? { ...a, price: live.price } : null;
+            })
+            .filter(Boolean);
+          // ราคาเมนูหลักอาจเปลี่ยนไปตั้งแต่ลูกค้าเพิ่มลงตะกร้าครั้งก่อน — ใช้ effectiveItemPrice ตัวเดียวกับตอนเพิ่มใหม่
+          // (นับรวมโปรส่วนลดปัจจุบันด้วย ไม่ใช้ราคาที่ค้างไว้ตอนเพิ่มครั้งก่อน)
+          const unitBase = effectiveItemPrice(mi, promos, Date.now());
+          const addOnsTotal = reconciledAddOns.reduce((s, a) => s + (Number(a.price) || 0), 0);
+          return { ...c, addOns: reconciledAddOns, price: unitBase + addOnsTotal };
+        })
+        .filter(Boolean);
+      return next.length === prev.length && next.every((c, i) => c.price === prev[i].price && (c.addOns || []).length === (prev[i].addOns || []).length) ? prev : next;
+    });
+  }, [menuLoaded, menu, promos]);
   const [shopOpen, setShopOpen] = useState(true); // สถานะเปิด/ปิดร้าน — ซิงก์ผ่าน Firestore (config/shopStatus) เหมือนเมนู
   const [orders, setOrders] = useState([]);
   const [recentOrderIds, setRecentOrderIds] = useState(new Set()); // ออร์เดอร์ที่เพิ่งเข้ามาสด ๆ (ไว้ไฮไลต์ชั่วคราว)
@@ -9075,6 +9317,21 @@ function App() {
     });
   };
 
+  // จดออร์เดอร์นี้ไว้ใน localStorage ของเครื่องลูกค้า — ให้กลับมาเช็คสถานะย้อนหลังได้แม้ปิดแท็บไปแล้ว
+  // เก็บแค่ id ไว้พอ (ไม่เก็บข้อมูลออร์เดอร์เต็ม — ตอนเปิดดูค่อยไปอ่านสดจาก Firestore กันข้อมูลเก่าค้าง)
+  // จำกัดไว้ 20 รายการล่าสุด กันโตไม่มีที่สิ้นสุดถ้าสั่งบ่อยมาก
+  const rememberMyOrder = (orderId) => {
+    if (!orderId) return;
+    try {
+      const raw = localStorage.getItem("freebuff_myOrders");
+      const list = raw ? JSON.parse(raw) : [];
+      const next = [orderId, ...(Array.isArray(list) ? list : []).filter((id) => id !== orderId)].slice(0, 20);
+      localStorage.setItem("freebuff_myOrders", JSON.stringify(next));
+    } catch (e) {
+      // localStorage ปิดใช้งาน/เต็ม — ข้ามไป ลูกค้าจะแค่กลับมาเช็คสถานะย้อนหลังไม่ได้ ไม่กระทบการสั่งซื้อ
+    }
+  };
+
   const placeOrder = async (paymentMethod, slip, customer, discount, cod) => {
     // เลขออร์เดอร์ — ใช้เลขท้าย 6 หลักของเวลาปัจจุบัน (เดิมใช้ 4 หลักซึ่งวนซ้ำทุก 10 วินาที
     // ทำให้ออร์เดอร์ที่มาใกล้กันได้เลขซ้ำ — 6 หลักวนซ้ำทุก ~16.6 นาที โอกาสชนกันแทบไม่มี
@@ -9132,6 +9389,7 @@ function App() {
     };
     const newOrder = {
       orderNo,
+      uid: uid || "", // uid ของเครื่องที่สั่ง — ใช้ให้ลูกค้าเช็คสถานะออร์เดอร์ตัวเองย้อนหลังได้ (rules จะเช็คให้อ่านได้เฉพาะออร์เดอร์ที่ uid ตรงกับตัวเอง)
       customerName: customer?.name || "",
       phone: customer?.phone || "", // เบอร์ติดต่อกลับ (ร้านโทรหาถ้าเกิดปัญหา)
       method: customer?.method || "delivery", // pickup | delivery
@@ -9158,6 +9416,7 @@ function App() {
         setLastCustomer(customer || null);
         setLastOrder({ ...newOrder, id: docRef.id });
         countPromoUse();
+        rememberMyOrder(docRef.id);
         setCart([]);
         setCustomerStage("success");
         return docRef.id;
@@ -9653,6 +9912,7 @@ function App() {
             cart={cart}
             setCart={setCart}
             onCheckout={() => setCustomerStage("checkout")}
+            onCheckOrders={() => setCustomerStage("myOrders")}
             shopOpen={shopOpen}
             menuLoaded={menuLoaded}
             promos={promos}
@@ -9679,10 +9939,14 @@ function App() {
             orderNo={lastOrderNo}
             customer={lastCustomer}
             onNewOrder={() => setCustomerStage("menu")}
+            onCheckOrders={() => setCustomerStage("myOrders")}
             paymentMethod={lastPaymentMethod}
             order={lastOrder}
             shopName={shopInfo.name}
           />
+        )}
+        {role === "customer" && customerStage === "myOrders" && (
+          <MyOrdersView onBack={() => setCustomerStage("menu")} />
         )}
         {role === "staff-orders" && (
           <StaffOrdersView
