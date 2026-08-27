@@ -7638,7 +7638,7 @@ function StaffStockView({ stockItems, updateStock, menu }) {
 
 // ================= STAFF ACCOUNTING VIEW (บัญชี) =================
 // ต้นทุน/กำไรต่อเมนู + สรุปแยกวิธีชำระ + บันทึกรายจ่ายรายวัน
-function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRound, updateSalesRound }) {
+function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeExpenseEntry, salesRound, setActiveRound, applyActiveEntriesChange, closeActiveRound, editSalesRoundHistory, deleteSalesRoundHistory }) {
   const [range, setRange] = useState("today"); // today | 7d | 30d | all
   const [expForm, setExpForm] = useState({ title: "", amount: "", category: "วัตถุดิบ", note: "", date: todayKey() });
   const [confirmDeleteExpense, setConfirmDeleteExpense] = useState(null);
@@ -7648,10 +7648,27 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
   const [roundEntryForm, setRoundEntryForm] = useState({ type: "withdraw", amount: "", note: "" });
   const [roundCloseForm, setRoundCloseForm] = useState({ cash: "", note: "" });
   const [showRoundHistory, setShowRoundHistory] = useState(false);
+  const [confirmDeleteRound, setConfirmDeleteRound] = useState(null); // id ของประวัติรอบที่รอกดยืนยันลบ
+  const [editingRound, setEditingRound] = useState(null); // id ของประวัติรอบที่กำลังแก้ไข (เงินนับจริง/หมายเหตุ)
+  const [editRoundForm, setEditRoundForm] = useState({ actual: "", note: "" });
 
   const activeRound = salesRound && salesRound.active ? salesRound.active : null;
   const roundHistory = (salesRound && salesRound.history) || [];
 
+  const startEditRound = (r) => {
+    setEditingRound(r.id);
+    setEditRoundForm({ actual: String(r.actual), note: r.note || "" });
+  };
+  const saveEditRound = () => {
+    const actual = Number(editRoundForm.actual);
+    if (!editRoundForm.actual || Number.isNaN(actual) || actual < 0) return;
+    const r = roundHistory.find((x) => x.id === editingRound);
+    if (!r) return;
+    // แก้เงินนับจริงแล้ว ต้องคำนวณส่วนต่าง (เกิน/ขาด) ใหม่ให้ตรงกับค่าที่แก้ ไม่ใช่ใช้ค่าเดิมที่คำนวณไว้ตอนปิดรอบ
+    const diff = Math.round((actual - r.expected) * 100) / 100;
+    editSalesRoundHistory(editingRound, { actual, note: editRoundForm.note.trim(), diff });
+    setEditingRound(null);
+  };
   // ยอดขายเงินสดในรอบนี้ — นับเฉพาะออร์เดอร์เงินสดที่เก็บเงินได้แล้ว (คนส่งกด "เก็บเงินแล้ว" แล้ว) ตั้งแต่เปิดรอบ
   const cashSalesInRound = useMemo(() => {
     if (!activeRound) return 0;
@@ -7678,10 +7695,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
     const cash = Number(roundOpenForm.cash);
     if (!roundOpenForm.cash || Number.isNaN(cash) || cash < 0) return;
     seedSalesRoundCounters(salesRound); // กันรอบใหม่ได้ id ซ้ำกับรอบเก่าที่ปิดไปแล้ว (บั๊ก id ซ้ำข้าม session)
-    updateSalesRound((prev) => ({
-      active: { id: nextSalesRoundId(), openedAt: Date.now(), openingCash: cash, note: roundOpenForm.note.trim(), entries: [] },
-      history: prev.history || [],
-    }));
+    setActiveRound({ id: nextSalesRoundId(), openedAt: Date.now(), openingCash: cash, note: roundOpenForm.note.trim(), entries: [] });
     setRoundOpenForm({ cash: "", note: "" });
   };
 
@@ -7689,22 +7703,16 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
     const amount = Number(roundEntryForm.amount);
     if (!roundEntryForm.amount || Number.isNaN(amount) || amount <= 0 || !activeRound) return;
     seedSalesRoundCounters(salesRound); // กันรายการเบิก/ฝากใหม่ได้ id ซ้ำกับรายการเดิม (บั๊ก id ซ้ำข้าม session)
-    updateSalesRound((prev) => ({
-      ...prev,
-      active: {
-        ...prev.active,
-        entries: [...(prev.active.entries || []), { id: nextRoundEntryId(), type: roundEntryForm.type, amount, note: roundEntryForm.note.trim(), createdAt: Date.now() }],
-      },
-    }));
+    // ตัดสินใจค่ารายการใหม่ (รวม id) ให้แน่นอนตายตัวครั้งเดียวตรงนี้ก่อน — ฟังก์ชันที่ส่งเข้าไปข้างล่างต้อง
+    // idempotent เรียกกี่รอบก็ได้ผลลัพธ์เดิม จึงห้ามเรียก nextRoundEntryId() ซ้ำข้างในนั้นอีก
+    const entry = { id: nextRoundEntryId(), type: roundEntryForm.type, amount, note: roundEntryForm.note.trim(), createdAt: Date.now() };
+    applyActiveEntriesChange((entries) => [...entries, entry]);
     setRoundEntryForm((f) => ({ ...f, amount: "", note: "" }));
   };
 
   const removeRoundEntry = (eid) => {
     if (!activeRound) return;
-    updateSalesRound((prev) => ({
-      ...prev,
-      active: { ...prev.active, entries: (prev.active.entries || []).filter((e) => e.id !== eid) },
-    }));
+    applyActiveEntriesChange((entries) => entries.filter((e) => e.id !== eid));
   };
 
   const closeRound = () => {
@@ -7724,7 +7732,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
       note: roundCloseForm.note.trim(),
       entries: activeRound.entries || [],
     };
-    updateSalesRound((prev) => ({ active: null, history: [record, ...(prev.history || [])] }));
+    closeActiveRound(record);
     setRoundCloseForm({ cash: "", note: "" });
   };
 
@@ -7748,8 +7756,11 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
   }, [orders, rangeStart]);
 
   // ต้นทุนของสินค้าแต่ละชิ้นในออร์เดอร์ — ต้นทุนตัวเมนู + ต้นทุนท็อปปิ้ง/แอดออนที่เลือก (ต้นทุน/หน่วย x จำนวน)
+  // จับคู่ด้วย menuId เป็นหลัก — กันเมนูที่ถูกลบไปแล้วแล้วมีเมนูใหม่ตั้งชื่อซ้ำ (คนละตัวกันจริง ๆ) โดนจับคู่ผิด
+  // เข้าใจว่าเป็นเมนูเดิม ทำให้รายงานต้นทุนย้อนหลังผิดเพี้ยนแบบไม่มีใครรู้ตัว fallback ด้วยชื่อใช้ได้เฉพาะออร์เดอร์
+  // เก่ามาก ๆ ที่บันทึกไว้ก่อนจะเริ่มเก็บ menuId เท่านั้น (ไม่มี menuId ติดมาเลยตั้งแต่ต้น)
   const costOfItem = (item) => {
-    const mi = menu.find((m) => m.id === item.menuId || m.name === item.name);
+    const mi = item.menuId ? menu.find((m) => m.id === item.menuId) : menu.find((m) => m.name === item.name);
     let cost = (mi && mi.cost != null ? Number(mi.cost) : 0) * item.qty;
     (item.addOns || []).forEach((ao) => {
       const opt = mi ? findMenuOption(mi, ao) : null;
@@ -7840,15 +7851,15 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
     seedExpenseCounter(expenses); // กันรายจ่ายใหม่ได้ id ซ้ำกับของเดิม (บั๊ก id ซ้ำข้าม session)
     const date = expForm.date || todayKey();
     const ts = new Date(`${date}T00:00:00`).getTime();
-    updateExpenses((prev) => [
-      ...prev,
-      { id: nextExpenseId(), title: expForm.title.trim(), amount, category: expForm.category, note: expForm.note.trim(), createdAt: ts },
-    ]);
+    // ตัดสินใจค่าที่จะเพิ่มให้แน่นอนตายตัวครั้งเดียวตรงนี้ (รวมถึง id) แล้วส่งค่าเดิมไปทั้ง local state และ Firestore
+    const entry = { id: nextExpenseId(), title: expForm.title.trim(), amount, category: expForm.category, note: expForm.note.trim(), createdAt: ts };
+    addExpenseEntry(entry);
     setExpForm((f) => ({ title: "", amount: "", category: f.category, note: "", date }));
   };
 
   const removeExpense = (id) => {
-    updateExpenses((prev) => prev.filter((e) => e.id !== id));
+    const entry = expenses.find((e) => e.id === id);
+    if (entry) removeExpenseEntry(entry);
     setConfirmDeleteExpense(null);
   };
 
@@ -8187,23 +8198,82 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
           <div className="mt-3 space-y-2">
             {roundHistory.map((r) => (
               <div key={r.id} style={{ background: COLORS.paper }} className="rounded-xl p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span style={{ color: COLORS.ink }} className="text-xs font-bold">
-                    {new Date(r.openedAt).toLocaleDateString("th-TH")}
-                  </span>
-                  <span
-                    style={{ color: r.diff === 0 ? COLORS.sage : r.diff > 0 ? "#B08628" : "#C0533F" }}
-                    className="text-xs font-bold"
-                  >
-                    {r.diff === 0 ? "ตรงเป๊ะ" : r.diff > 0 ? `เกิน ฿${r.diff}` : `ขาด ฿${Math.abs(r.diff)}`}
-                  </span>
-                </div>
-                <p style={{ color: COLORS.inkSoft }} className="text-[11px] leading-relaxed">
-                  เปิด {new Date(r.openedAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })} ·{" "}
-                  ปิด {new Date(r.closedAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })} · เงินสดเปิด ฿{fmtBaht(r.openingCash)} ·{" "}
-                  ขายเงินสด ฿{fmtBaht(r.cashSales)} · ควรมี ฿{fmtBaht(r.expected)} · จริง ฿{fmtBaht(r.actual)}
-                </p>
-                {r.note && <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-0.5">หมายเหตุ: {r.note}</p>}
+                {editingRound === r.id ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <span style={{ color: COLORS.ink }} className="text-xs font-bold">
+                        {new Date(r.openedAt).toLocaleDateString("th-TH")} — แก้ไขรายการ
+                      </span>
+                    </div>
+                    <p style={{ color: COLORS.inkSoft }} className="text-[11px]">
+                      ควรมี ฿{fmtBaht(r.expected)} (คำนวณตอนปิดรอบไว้แล้ว แก้ไม่ได้)
+                    </p>
+                    <div>
+                      <label style={{ color: COLORS.inkSoft }} className="text-[11px] font-medium block mb-1">เงินที่นับได้จริง (บาท)</label>
+                      <input
+                        value={editRoundForm.actual}
+                        onChange={(e) => setEditRoundForm((f) => ({ ...f, actual: decimalDigitsOnly(e.target.value) }))}
+                        inputMode="decimal"
+                        style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                        className="w-full rounded-lg px-3 py-2 text-sm bg-white outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label style={{ color: COLORS.inkSoft }} className="text-[11px] font-medium block mb-1">หมายเหตุ</label>
+                      <input
+                        value={editRoundForm.note}
+                        onChange={(e) => setEditRoundForm((f) => ({ ...f, note: e.target.value }))}
+                        style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                        className="w-full rounded-lg px-3 py-2 text-sm bg-white outline-none"
+                      />
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={() => setEditingRound(null)}
+                        className="flex-1 rounded-lg py-2 text-xs font-semibold"
+                        style={{ background: "#FFFFFF", color: COLORS.inkSoft, border: `1px solid ${COLORS.line}` }}
+                      >
+                        ยกเลิก
+                      </button>
+                      <button
+                        onClick={saveEditRound}
+                        disabled={!editRoundForm.actual}
+                        className="flex-1 rounded-lg py-2 text-xs font-semibold disabled:opacity-40"
+                        style={{ background: COLORS.caramel, color: "#FFF9F0" }}
+                      >
+                        บันทึก
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between mb-1">
+                      <span style={{ color: COLORS.ink }} className="text-xs font-bold">
+                        {new Date(r.openedAt).toLocaleDateString("th-TH")}
+                      </span>
+                      <div className="flex items-center gap-2.5">
+                        <span
+                          style={{ color: r.diff === 0 ? COLORS.sage : r.diff > 0 ? "#B08628" : "#C0533F" }}
+                          className="text-xs font-bold"
+                        >
+                          {r.diff === 0 ? "ตรงเป๊ะ" : r.diff > 0 ? `เกิน ฿${fmtBaht(r.diff)}` : `ขาด ฿${fmtBaht(Math.abs(r.diff))}`}
+                        </span>
+                        <button onClick={() => startEditRound(r)} style={{ color: COLORS.inkSoft }} className="flex-shrink-0">
+                          <Pencil size={13} />
+                        </button>
+                        <button onClick={() => setConfirmDeleteRound(r.id)} style={{ color: "#C0533F" }} className="flex-shrink-0">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                    <p style={{ color: COLORS.inkSoft }} className="text-[11px] leading-relaxed">
+                      เปิด {new Date(r.openedAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })} ·{" "}
+                      ปิด {new Date(r.closedAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })} · เงินสดเปิด ฿{fmtBaht(r.openingCash)} ·{" "}
+                      ขายเงินสด ฿{fmtBaht(r.cashSales)} · ควรมี ฿{fmtBaht(r.expected)} · จริง ฿{fmtBaht(r.actual)}
+                    </p>
+                    {r.note && <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-0.5">หมายเหตุ: {r.note}</p>}
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -8456,6 +8526,32 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
                 ยกเลิก
               </button>
               <button onClick={() => removeExpense(confirmDeleteExpense)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#C0533F", color: "#FFF9F0" }}>
+                ลบ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ยืนยันลบประวัติรอบเงินสด */}
+      {confirmDeleteRound && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-6">
+          <SheetLock />
+          <div onClick={() => setConfirmDeleteRound(null)} className="absolute inset-0 bg-black/30" />
+          <div style={{ background: COLORS.cream }} className="relative rounded-2xl p-5 w-full max-w-xs">
+            <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-4">ลบประวัติรอบเงินสดนี้? (ลบไม่คืนแล้ว)</p>
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmDeleteRound(null)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#FFFFFF", color: COLORS.inkSoft, border: `1px solid ${COLORS.line}` }}>
+                ยกเลิก
+              </button>
+              <button
+                onClick={() => {
+                  deleteSalesRoundHistory(confirmDeleteRound);
+                  setConfirmDeleteRound(null);
+                }}
+                className="flex-1 rounded-xl py-2.5 text-xs font-semibold"
+                style={{ background: "#C0533F", color: "#FFF9F0" }}
+              >
                 ลบ
               </button>
             </div>
@@ -8998,17 +9094,79 @@ function App() {
   }, [staffUnlocked]);
 
   // เขียนรอบการขายกลับขึ้น Firestore — ใช้จากแท็บบัญชี (เปิด/จดเบิกฝาก/ปิดรอบ)
-  const updateSalesRound = (updater) => {
+  // แก้ไข/บันทึกรอบเงินสด — แยกเป็นฟังก์ชันเฉพาะแต่ละงาน (ไม่ใช้ updater กลางแบบเดิม) เพราะแต่ละงาน
+  // มีความเสี่ยงชนกันตอนซิงก์ Firestore ไม่เหมือนกัน:
+  // - เปิดรอบใหม่: ตั้งค่า active ทั้งก้อนใหม่ ไม่มีอะไรให้ชนกัน (เขียนทับได้ปลอดภัย)
+  // - เพิ่ม/ลบรายการฝาก-เบิกในรอบที่เปิดอยู่: ซ้อนอยู่ใน active.entries ต้องอ่านสดจากเซิร์ฟเวอร์ก่อนเขียน
+  //   (transaction) กันสองเครื่องเพิ่ม/ลบรายการพร้อมกันแล้วเขียนทับกันเอง เหมือนปัญหาที่เจอตอนแก้รายจ่าย
+  // - ปิดรอบ: ย้าย active ไปเป็นประวัติ (history) ใช้ arrayUnion กันประวัติหายจากการชนกัน
+  const setActiveRound = (activeValue) => {
     setSalesRound((prev) => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
+      const next = { ...prev, active: activeValue };
       if (FIREBASE_SYNC_ENABLED) {
-        db.collection("config")
-          .doc("salesRound")
-          .set(next)
-          .catch((err) => console.error("บันทึกรอบการขายขึ้น Firestore ไม่สำเร็จ:", err));
+        db.collection("config").doc("salesRound").set(next).catch((err) => console.error("บันทึกรอบการขายขึ้น Firestore ไม่สำเร็จ:", err));
       }
       return next;
     });
+  };
+  // เพิ่ม/ลบรายการในรอบที่เปิดอยู่ — ใช้ transaction อ่านสดจากเซิร์ฟเวอร์ก่อนแก้ entries ทุกครั้ง
+  // updateEntries ต้องเป็นฟังก์ชัน "ทำซ้ำได้" (pure/idempotent) เท่านั้น เช่น filter ลบด้วย id — ห้ามสร้าง
+  // ค่าใหม่ที่ไม่เหมือนเดิมทุกครั้งที่เรียกซ้ำ (เช่นเรียก nextXxxId() ข้างในเอง) เพราะฟังก์ชันนี้จะถูกเรียก
+  // 2 รอบเสมอ (ครั้งแรกกับ local state ก่อน แล้วอีกครั้งกับข้อมูลสดจาก transaction) ถ้าไม่ idempotent
+  // จะได้ผลลัพธ์ไม่ตรงกันระหว่างที่โชว์บนจอกับที่บันทึกจริงใน Firestore (บั๊กที่เจอตอนแก้รายจ่ายมาก่อน)
+  const applyActiveEntriesChange = (updateEntries) => {
+    setSalesRound((prev) => {
+      if (!prev.active) return prev;
+      return { ...prev, active: { ...prev.active, entries: updateEntries(prev.active.entries || []) } };
+    });
+    if (!FIREBASE_SYNC_ENABLED) return;
+    const docRef = db.collection("config").doc("salesRound");
+    db.runTransaction(async (tx) => {
+      const snap = await tx.get(docRef);
+      const data = snap.exists ? snap.data() : {};
+      if (!data.active) return; // รอบถูกปิดไปแล้วจากที่อื่นพอดี — ไม่มีอะไรให้แก้
+      const nextData = { ...data, active: { ...data.active, entries: updateEntries(data.active.entries || []) } };
+      tx.set(docRef, nextData);
+    }).catch((err) => console.error("บันทึกรายการรอบเงินสดขึ้น Firestore ไม่สำเร็จ:", err));
+  };
+  // ปิดรอบ — ย้าย active ไปเก็บใน history (เป็น array) ใช้ arrayUnion กันประวัติของรอบอื่นหายถ้ามีคน
+  // ปิดรอบพร้อมกันเป๊ะ ๆ (แทบเป็นไปไม่ได้ในทางปฏิบัติ แต่ทำให้ถูกไว้เผื่อไว้) + เคลียร์ active เป็น null พร้อมกัน
+  const closeActiveRound = (record) => {
+    setSalesRound((prev) => ({ active: null, history: [record, ...(prev.history || [])] }));
+    if (!FIREBASE_SYNC_ENABLED) return;
+    db.collection("config")
+      .doc("salesRound")
+      .set({ active: null, history: firebase.firestore.FieldValue.arrayUnion(record) }, { merge: true })
+      .catch((err) => console.error("บันทึกปิดรอบขึ้น Firestore ไม่สำเร็จ:", err));
+  };
+  // แก้ไข/ลบประวัติรอบที่ปิดไปแล้ว — พนักงานพิมพ์เงินนับจริงผิด หรือรายการฝาก/เบิกผิด แล้วอยากแก้ย้อนหลังได้
+  // ใช้ arrayRemove ของ "รายการเดิมทั้งก้อน" แล้วค่อย arrayUnion "รายการใหม่" เข้าไปแทน (ไม่ใช่ set() ทับ
+  // ทั้ง history array ตรง ๆ) กันรายการอื่นในประวัติหายไปถ้ามีคนแก้ประวัติคนละรายการพร้อมกัน
+  const editSalesRoundHistory = (recordId, patch) => {
+    setSalesRound((prev) => ({
+      ...prev,
+      history: (prev.history || []).map((r) => (r.id === recordId ? { ...r, ...patch } : r)),
+    }));
+    if (!FIREBASE_SYNC_ENABLED) return;
+    const docRef = db.collection("config").doc("salesRound");
+    db.runTransaction(async (tx) => {
+      const snap = await tx.get(docRef);
+      const data = snap.exists ? snap.data() : {};
+      const history = Array.isArray(data.history) ? data.history : [];
+      const nextHistory = history.map((r) => (r.id === recordId ? { ...r, ...patch } : r));
+      tx.set(docRef, { ...data, history: nextHistory });
+    }).catch((err) => console.error("แก้ไขประวัติรอบเงินสดไม่สำเร็จ:", err));
+  };
+  const deleteSalesRoundHistory = (recordId) => {
+    setSalesRound((prev) => ({ ...prev, history: (prev.history || []).filter((r) => r.id !== recordId) }));
+    if (!FIREBASE_SYNC_ENABLED) return;
+    const docRef = db.collection("config").doc("salesRound");
+    db.runTransaction(async (tx) => {
+      const snap = await tx.get(docRef);
+      const data = snap.exists ? snap.data() : {};
+      const history = Array.isArray(data.history) ? data.history : [];
+      tx.set(docRef, { ...data, history: history.filter((r) => r.id !== recordId) });
+    }).catch((err) => console.error("ลบประวัติรอบเงินสดไม่สำเร็จ:", err));
   };
 
   // ฟังสถานะเปิด/ปิดร้านจาก Firestore แบบเดียวกับเมนู — ทุกเครื่อง (ลูกค้า+พนักงาน)
@@ -9174,17 +9332,28 @@ function App() {
   };
 
   // เขียนรายจ่ายกลับขึ้น Firestore ทุกครั้งที่พนักงานเพิ่ม/ลบ
-  const updateExpenses = (updater) => {
-    setExpenses((prev) => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
-      if (FIREBASE_SYNC_ENABLED) {
-        db.collection("config")
-          .doc("expenses")
-          .set({ items: next })
-          .catch((err) => console.error("บันทึกรายจ่ายขึ้น Firestore ไม่สำเร็จ:", err));
-      }
-      return next;
-    });
+  // อัปเดตรายการรายจ่าย — ยังคง local state แบบ optimistic เหมือนเดิม แต่ฝั่ง Firestore ใช้
+  // arrayUnion/arrayRemove ของช่องนั้นตรง ๆ แทนการอ่าน-แล้ว-set()ทับทั้งก้อน กันพนักงาน 2 คน
+  // (หรือกดเพิ่ม/ลบรัวๆ ในเครื่องเดียวกัน) แก้พร้อมกันแล้วเขียนทับกันเอง ทำให้รายการที่เพิ่ม/ลบไปแล้วหายไปเงียบๆ
+  // หมายเหตุ: ไม่ใช้ transaction ทั่วไปแบบ deductStockForOrder เพราะ updater ของ addExpense เรียก
+  // nextExpenseId() ข้างในตัวมันเอง (เพิ่มเลขนับทุกครั้งที่ถูกเรียก) — ถ้าเรียก updater ซ้ำ (เช่นตอน
+  // transaction retry) จะได้ id ใหม่ไม่ตรงกับที่โชว์ในหน้าจอ (optimistic) แล้ว จึงต้องคำนวณค่าที่จะเพิ่ม/ลบ
+  // ให้แน่นอนตายตัวครั้งเดียวก่อน แล้วส่งค่าเดิมนั้นไปทั้ง local state และ Firestore
+  const addExpenseEntry = (entry) => {
+    setExpenses((prev) => [...prev, entry]);
+    if (!FIREBASE_SYNC_ENABLED) return;
+    db.collection("config")
+      .doc("expenses")
+      .set({ items: firebase.firestore.FieldValue.arrayUnion(entry) }, { merge: true })
+      .catch((err) => console.error("บันทึกรายจ่ายขึ้น Firestore ไม่สำเร็จ:", err));
+  };
+  const removeExpenseEntry = (entry) => {
+    setExpenses((prev) => prev.filter((e) => e.id !== entry.id));
+    if (!FIREBASE_SYNC_ENABLED) return;
+    db.collection("config")
+      .doc("expenses")
+      .set({ items: firebase.firestore.FieldValue.arrayRemove(entry) }, { merge: true })
+      .catch((err) => console.error("ลบรายจ่ายขึ้น Firestore ไม่สำเร็จ:", err));
   };
 
   // หักสต็อกอัตโนมัติเมื่อออเดอร์ถูกทำเสร็จ (สถานะ → done) — ใช้สูตร recipe ของแต่ละเมนู
@@ -9195,7 +9364,9 @@ function App() {
     if (!order || !Array.isArray(order.items)) return;
     const needs = {}; // stockId -> จำนวนที่ต้องใช้รวม
     (order.items || []).forEach((item) => {
-      const mi = menu.find((m) => m.id === item.menuId || m.name === item.name);
+      // จับคู่ด้วย menuId เป็นหลัก — เหตุผลเดียวกับ costOfItem: กันเมนูที่ถูกลบไปแล้วโดนจับคู่ผิดกับ
+      // เมนูใหม่ที่ตั้งชื่อซ้ำ (คนละตัวกันจริง ๆ) ซึ่งจะทำให้หักวัตถุดิบผิดตัวไปเลย ไม่ใช่แค่รายงานผิด
+      const mi = item.menuId ? menu.find((m) => m.id === item.menuId) : menu.find((m) => m.name === item.name);
       if (!mi) return;
       // วัตถุดิบของตัวเมนูหลัก
       Object.entries(mi.recipe || {}).forEach(([sid, qtyPer]) => {
@@ -10022,9 +10193,14 @@ function App() {
             orders={orders}
             menu={menu}
             expenses={expenses}
-            updateExpenses={updateExpenses}
+            addExpenseEntry={addExpenseEntry}
+            removeExpenseEntry={removeExpenseEntry}
             salesRound={salesRound}
-            updateSalesRound={updateSalesRound}
+            setActiveRound={setActiveRound}
+            applyActiveEntriesChange={applyActiveEntriesChange}
+            closeActiveRound={closeActiveRound}
+            editSalesRoundHistory={editSalesRoundHistory}
+            deleteSalesRoundHistory={deleteSalesRoundHistory}
           />
         )}
         {role === "staff-stock" && <StaffStockView stockItems={stockItems} updateStock={updateStock} menu={menu} />}
