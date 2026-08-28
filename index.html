@@ -3037,7 +3037,8 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, onCheckOrders, paymen
 // ออกแบบให้ประหยัด Firestore read ที่สุด: ไม่มี live listener ค้างไว้ตลอด — อ่านทีเดียวตอนเปิดหน้า/กดรีเฟรชเท่านั้น
 // (ลูกค้าทั่วไปกดเช็คแค่ 1-2 ครั้งต่อออร์เดอร์ ไม่ได้ต้องการอัปเดตแบบเรียลไทม์ตลอดเวลา)
 function MyOrdersView({ onBack }) {
-  const [orderDocs, setOrderDocs] = useState([]); // [{id, data|null, error}] — data null ถ้ายังไม่โหลด/หาไม่เจอ
+  const [orderDocs, setOrderDocs] = useState({}); // { [id]: data|null } — null = ยังไม่โหลด/หาไม่เจอ/ถูกลบไปแล้ว
+  const [orderIds, setOrderIds] = useState([]); // ลำดับ id ที่โหลดมาจาก localStorage (คงลำดับไว้ตอนโชว์)
   const [loading, setLoading] = useState(true);
 
   const statusMeta = {
@@ -3049,7 +3050,10 @@ function MyOrdersView({ onBack }) {
     cancelled: { label: "ออร์เดอร์นี้ถูกยกเลิก", color: "#C0533F", bg: "#F3D9D3" },
   };
 
-  const loadOrders = () => {
+  // ฟัง (onSnapshot) ทุกออร์เดอร์ที่เครื่องนี้จำไว้แบบเรียลไทม์ — ฝั่งร้านเปลี่ยนสถานะปุ๊บ หน้าจอลูกค้าขยับตามทันที
+  // ไม่ต้องกดรีเฟรชเอง แต่เชื่อมต่อค้างไว้แค่ตอนที่ยังอยู่หน้านี้เท่านั้น — ออกจากหน้านี้ (ปิดแท็บ/กดกลับ/สลับ
+  // ไปหน้าอื่นในแอป) จะตัดการเชื่อมต่อทั้งหมดทันที (ดู useEffect cleanup ด้านล่าง) กันกิน read ค้างไม่จำเป็น
+  useEffect(() => {
     let ids = [];
     try {
       const raw = localStorage.getItem("freebuff_myOrders");
@@ -3058,40 +3062,57 @@ function MyOrdersView({ onBack }) {
     } catch (e) {
       ids = [];
     }
+    setOrderIds(ids);
     if (!ids.length || !FIREBASE_SYNC_ENABLED || !db) {
-      setOrderDocs([]);
       setLoading(false);
       return;
     }
     setLoading(true);
-    // อ่านทีละใบแบบ .get() ธรรมดา (ไม่ใช่ onSnapshot) — เสีย read ตามจำนวนออร์เดอร์ที่มีจริงครั้งเดียวต่อการกดเช็คหนึ่งรอบ
-    Promise.all(
-      ids.map((id) =>
-        db
-          .collection("orders")
-          .doc(id)
-          .get()
-          .then((doc) => ({ id, data: doc.exists ? doc.data() : null }))
-          .catch(() => ({ id, data: null, error: true }))
-      )
-    ).then((results) => {
-      // เอาเฉพาะที่ยังหาเจอจริง (ใบที่พนักงานลบทิ้งไปแล้วจะหายจากลิสต์เอง) เรียงใหม่สุดก่อน
-      const found = results.filter((r) => r.data);
-      found.sort((a, b) => (b.data.createdAt || 0) - (a.data.createdAt || 0));
-      setOrderDocs(found);
-      setLoading(false);
-      // ซ่อมลิสต์ที่เก็บไว้ — ตัด id ที่หาไม่เจอแล้วออก กันลิสต์บวมด้วยของที่ไม่มีอยู่จริงไปเรื่อย ๆ
-      try {
-        localStorage.setItem("freebuff_myOrders", JSON.stringify(found.map((r) => r.id)));
-      } catch (e) {
-        // no-op
-      }
-    });
-  };
-
-  useEffect(() => {
-    loadOrders();
+    let pending = ids.length;
+    const unsubscribers = ids.map((id) =>
+      db
+        .collection("orders")
+        .doc(id)
+        .onSnapshot(
+          (doc) => {
+            setOrderDocs((prev) => ({ ...prev, [id]: doc.exists ? doc.data() : null }));
+            if (pending > 0) {
+              pending -= 1;
+              if (pending === 0) setLoading(false);
+            }
+          },
+          (err) => {
+            console.error("เช็คสถานะออร์เดอร์ไม่สำเร็จ:", err);
+            setOrderDocs((prev) => ({ ...prev, [id]: null }));
+            if (pending > 0) {
+              pending -= 1;
+              if (pending === 0) setLoading(false);
+            }
+          }
+        )
+    );
+    // เลิกฟังทุกใบทันทีที่ออกจากหน้านี้ — สำคัญมาก ไม่งั้น listener จะค้างกิน read ต่อไปเรื่อย ๆ
+    // แม้ลูกค้าจะออกจากหน้าจอนี้ไปแล้วก็ตาม (React ไม่ได้ตัดการเชื่อมต่อ Firestore ให้เองอัตโนมัติ)
+    return () => unsubscribers.forEach((unsub) => unsub());
   }, []);
+
+  // ซ่อมลิสต์ที่เก็บไว้ใน localStorage — ตัด id ที่หาไม่เจอแล้วออก (พนักงานลบออร์เดอร์ทิ้งไปแล้ว) กันลิสต์
+  // บวมขึ้นเรื่อย ๆ ด้วยของที่ไม่มีอยู่จริง ทำเป็น effect แยกเพื่อไม่ให้รันซ้ำทุกครั้งที่ onSnapshot ยิง
+  useEffect(() => {
+    if (loading || !orderIds.length) return;
+    const stillValid = orderIds.filter((id) => orderDocs[id]);
+    if (stillValid.length === orderIds.length) return; // ไม่มีอะไรเปลี่ยน ไม่ต้องเขียนซ้ำ
+    try {
+      localStorage.setItem("freebuff_myOrders", JSON.stringify(stillValid));
+    } catch (e) {
+      // no-op
+    }
+  }, [loading, orderIds, orderDocs]);
+
+  const visibleOrders = orderIds
+    .map((id) => ({ id, data: orderDocs[id] }))
+    .filter((r) => r.data)
+    .sort((a, b) => (b.data.createdAt || 0) - (a.data.createdAt || 0));
 
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-4 pt-5 pb-10">
@@ -3102,15 +3123,6 @@ function MyOrdersView({ onBack }) {
         <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-xl font-semibold flex-1">
           ออร์เดอร์ของฉัน
         </h1>
-        <button
-          onClick={loadOrders}
-          disabled={loading}
-          style={{ color: COLORS.caramelDark }}
-          className="text-xs font-semibold inline-flex items-center gap-1 disabled:opacity-50 px-2 py-1"
-        >
-          {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-          รีเฟรช
-        </button>
       </div>
 
       {loading && (
@@ -3119,7 +3131,7 @@ function MyOrdersView({ onBack }) {
         </div>
       )}
 
-      {!loading && orderDocs.length === 0 && (
+      {!loading && visibleOrders.length === 0 && (
         <div className="flex flex-col items-center text-center py-16 px-6">
           <p style={{ color: COLORS.inkSoft }} className="text-sm">
             ยังไม่มีออร์เดอร์ที่เช็คได้จากเครื่องนี้
@@ -3130,7 +3142,7 @@ function MyOrdersView({ onBack }) {
       )}
 
       <div className="space-y-3">
-        {orderDocs.map(({ id, data: o }) => {
+        {visibleOrders.map(({ id, data: o }) => {
           const meta = statusMeta[o.status] || statusMeta.new;
           const total = calcOrderTotal(o);
           return (
@@ -3942,6 +3954,14 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
         <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1.5 leading-relaxed">
           ช่วงเวลาจัดส่งที่ลูกค้าเลือกได้ (ทุก 30 นาที) — วันนี้จะเหลือเฉพาะเวลาที่ยังไม่ผ่านไปเท่านั้น ถ้าร้านเปิด 10 โมงก็ตั้งจัดส่งเริ่ม 10:00 ได้
         </p>
+        {(openTimeInput >= closeTimeInput || deliveryOpenInput >= deliveryCloseInput) && (
+          <p style={{ color: "#C0533F" }} className="text-[11px] font-medium mt-1.5 leading-relaxed">
+            ⚠ เวลาปิด{openTimeInput >= closeTimeInput ? "ร้าน" : ""}
+            {openTimeInput >= closeTimeInput && deliveryOpenInput >= deliveryCloseInput ? "/" : ""}
+            {deliveryOpenInput >= deliveryCloseInput ? "จัดส่ง" : ""} ตั้งไว้ไม่หลังเวลาเปิดเลย — ตรวจดูอีกทีว่าพิมพ์ถูกไหม
+            (ระบบยังใช้งานได้ตามปกติ แต่ลูกค้าอาจเห็นช่วงเวลาที่แสดงกับที่เลือกได้จริงไม่ตรงกัน)
+          </p>
+        )}
 
         <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mt-3 mb-1">โค้ด QR (พร้อมเพย์)</label>
         <div className="flex items-center gap-3">
