@@ -1262,15 +1262,28 @@ function PrimaryButton({ children, onClick, disabled, full, style }) {
 }
 
 // ล็อกการเลื่อนหน้าข้างหลังเมื่อมีชีต/ฟอร์ม/ป็อปอัพเปิดอยู่ — บน iPad/จอใหญ่ scroll จะได้ไม่ไหลไปโดนหน้าเมนูข้างหลัง
+// นับจำนวน SheetLock ที่ mount อยู่พร้อมกัน (ชั้นซ้อนกันของ sheet/modal) แทนที่จะให้แต่ละตัวจำค่า
+// overflow เดิมแล้วคืนค่าเอง — ถ้ามี sheet ซ้อนกัน 2 ชั้น (เช่น กดยืนยันซ้อนบน sheet เลือกรายการ)
+// แล้วปิดพร้อมกันทั้งคู่ในจังหวะเดียว (React unmount ทั้งสองใน commit เดียวกัน) ลำดับที่ cleanup effect
+// ของแต่ละตัวทำงานไม่การันตีจากภายนอก — ถ้าตัวที่ mount ทีหลัง (จำค่า "hidden" ไว้ตอน mount เพราะชั้นแรก
+// ล็อกไว้ก่อนแล้ว) ทำ cleanup "หลัง" ตัวแรก จะเขียนทับค่าที่ถูกต้องด้วยค่าเก่าที่จำผิดพลาดไว้ กลายเป็นหน้าจอ
+// เลื่อนไม่ได้ค้างอยู่ถาวรแม้ปิด sheet ทั้งหมดแล้ว — วิธีนับจำนวนกันปัญหานี้ได้แน่นอนไม่ว่าลำดับ cleanup จะเป็นแบบไหน
+let sheetLockCount = 0;
+let sheetLockPrevOverflow = { body: "", html: "" };
 function SheetLock() {
   useEffect(() => {
-    const prevBody = document.body.style.overflow;
-    const prevHtml = document.documentElement.style.overflow;
+    if (sheetLockCount === 0) {
+      sheetLockPrevOverflow = { body: document.body.style.overflow, html: document.documentElement.style.overflow };
+    }
+    sheetLockCount += 1;
     document.body.style.overflow = "hidden";
     document.documentElement.style.overflow = "hidden";
     return () => {
-      document.body.style.overflow = prevBody;
-      document.documentElement.style.overflow = prevHtml;
+      sheetLockCount = Math.max(0, sheetLockCount - 1);
+      if (sheetLockCount === 0) {
+        document.body.style.overflow = sheetLockPrevOverflow.body;
+        document.documentElement.style.overflow = sheetLockPrevOverflow.html;
+      }
     };
   }, []);
   return null;
@@ -1572,22 +1585,21 @@ function CustomerView({ menu, cart, setCart, onCheckout, onCheckOrders, shopOpen
               style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}`, opacity: soldOut ? 0.55 : 1, cursor: "pointer" }}
               className="rounded-2xl p-4 flex gap-3 items-start"
             >
-              {item.img ? (
-                <img
-                  src={item.img}
-                  alt={item.name}
-                  onClick={(e) => { e.stopPropagation(); setZoomImg(item.img); }}
-                  className="w-20 h-20 rounded-xl object-cover flex-shrink-0"
-                  style={{ border: `1px solid ${COLORS.line}`, cursor: "zoom-in" }}
-                />
-              ) : (
-                <div
-                  style={{ background: COLORS.peachSoft, color: COLORS.caramelDark }}
-                  className="w-20 h-20 rounded-xl flex items-center justify-center flex-shrink-0"
-                >
+              <div className="relative w-20 h-20 rounded-xl flex-shrink-0" style={{ background: COLORS.peachSoft }}>
+                <div style={{ color: COLORS.caramelDark }} className="absolute inset-0 flex items-center justify-center">
                   <Icon className="w-8 h-8" />
                 </div>
-              )}
+                {item.img && (
+                  <img
+                    src={item.img}
+                    alt={item.name}
+                    onClick={(e) => { e.stopPropagation(); setZoomImg(item.img); }}
+                    onError={(e) => { e.currentTarget.style.display = "none"; }}
+                    className="absolute inset-0 w-20 h-20 rounded-xl object-cover"
+                    style={{ border: `1px solid ${COLORS.line}`, cursor: "zoom-in" }}
+                  />
+                )}
+              </div>
               <div className="flex-1 min-w-0">
                 <h3 style={{ color: COLORS.ink }} className="font-semibold text-[15px]">
                   {item.name}
@@ -1623,7 +1635,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, onCheckOrders, shopOpen
                         onClick={() => shopOpen && !soldOut && openAddOnSheet(item)}
                         disabled={!shopOpen || soldOut}
                         style={{ background: shopOpen && !soldOut ? COLORS.caramel : "#D9CBB5", color: "#FFF9F0" }}
-                        className="w-8 h-8 rounded-full flex items-center justify-center active:scale-90 transition-transform disabled:cursor-not-allowed"
+                        className="w-11 h-11 rounded-full flex items-center justify-center active:scale-90 transition-transform disabled:cursor-not-allowed"
                       >
                         <Plus size={16} />
                       </button>
@@ -1633,7 +1645,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, onCheckOrders, shopOpen
                       onClick={() => shopOpen && !soldOut && addToCart(item)}
                       disabled={!shopOpen || soldOut}
                       style={{ background: shopOpen && !soldOut ? COLORS.caramel : "#D9CBB5", color: "#FFF9F0" }}
-                      className="w-8 h-8 rounded-full flex items-center justify-center active:scale-90 transition-transform disabled:cursor-not-allowed"
+                      className="w-11 h-11 rounded-full flex items-center justify-center active:scale-90 transition-transform disabled:cursor-not-allowed"
                     >
                       <Plus size={16} />
                     </button>
@@ -1645,7 +1657,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, onCheckOrders, shopOpen
                       <button
                         onClick={() => changeQty(item.id, -1)}
                         style={{ color: COLORS.caramelDark }}
-                        className="w-7 h-7 flex items-center justify-center active:scale-90"
+                        className="w-9 h-9 flex items-center justify-center active:scale-90"
                       >
                         <Minus size={14} />
                       </button>
@@ -1655,7 +1667,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, onCheckOrders, shopOpen
                       <button
                         onClick={() => !soldOut && changeQty(item.id, 1)}
                         style={{ color: soldOut ? COLORS.inkSoft : COLORS.caramelDark, opacity: soldOut ? 0.5 : 1 }}
-                        className="w-7 h-7 flex items-center justify-center active:scale-90"
+                        className="w-9 h-9 flex items-center justify-center active:scale-90"
                       >
                         <Plus size={14} />
                       </button>
@@ -1686,6 +1698,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, onCheckOrders, shopOpen
                   src={detailFor.img}
                   alt={detailFor.name}
                   onClick={() => setZoomImg(detailFor.img)}
+                  onError={(e) => { e.currentTarget.style.display = "none"; }}
                   className="w-full h-52 object-cover rounded-2xl mb-3"
                   style={{ cursor: "zoom-in" }}
                 />
@@ -1751,6 +1764,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, onCheckOrders, shopOpen
                   src={addOnSheetFor.img}
                   alt={addOnSheetFor.name}
                   onClick={() => setZoomImg(addOnSheetFor.img)}
+                  onError={(e) => { e.currentTarget.style.display = "none"; }}
                   className="w-full h-44 object-cover rounded-2xl mb-3"
                   style={{ cursor: "zoom-in" }}
                 />
@@ -1890,11 +1904,11 @@ function CustomerView({ menu, cart, setCart, onCheckout, onCheckOrders, shopOpen
                       </p>
                     </div>
                     <div style={{ background: COLORS.peachSoft }} className="flex items-center gap-3 rounded-full px-1">
-                      <button onClick={() => changeQty(item.cartId, -1)} style={{ color: COLORS.caramelDark }} className="w-7 h-7 flex items-center justify-center">
+                      <button onClick={() => changeQty(item.cartId, -1)} style={{ color: COLORS.caramelDark }} className="w-9 h-9 flex items-center justify-center">
                         <Minus size={14} />
                       </button>
                       <span style={{ color: COLORS.ink }} className="text-sm font-semibold w-4 text-center">{item.qty}</span>
-                      <button onClick={() => changeQty(item.cartId, 1)} style={{ color: COLORS.caramelDark }} className="w-7 h-7 flex items-center justify-center">
+                      <button onClick={() => changeQty(item.cartId, 1)} style={{ color: COLORS.caramelDark }} className="w-9 h-9 flex items-center justify-center">
                         <Plus size={14} />
                       </button>
                     </div>
@@ -2693,7 +2707,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
           ? "ยืนยันสั่งอาหาร"
           : collectOnDelivery
           ? "ยืนยันสั่งอาหาร (จ่ายตอนรับของ)"
-          : `ยืนยันการโอน ฿${total}`}
+          : `ยืนยันการโอน ฿${fmtBaht(total)}`}
       </PrimaryButton>
     </div>
   );
@@ -2746,7 +2760,12 @@ function drawOrderReceipt(order, shopName) {
     const nameLines = Math.min(2, wrap(`${i.name} × ${i.qty}`, W - M - 150, 16).length);
     itemH += (nameLines - 1) * 24;
     itemH += 22 * ((i.addOns && i.addOns.length) || 0);
-    if (i.note && i.note.trim()) itemH += 30;
+    // หมายเหตุลูกค้าพิมพ์ได้ยาวไม่จำกัด (เช่นแพ้อาหาร/รายละเอียดหลายข้อ) ต้องห่อบรรทัดเหมือนชื่อเมนู
+    // ไม่งั้นจะไหลล้นขอบขวาของใบเสร็จ มองไม่เห็นข้อความส่วนที่เกิน — คำนวณจำนวนบรรทัดจริงตรงนี้ (สูงสุด 3 บรรทัด)
+    if (i.note && i.note.trim()) {
+      const noteLines = Math.min(3, wrap(`หมายเหตุ: ${i.note.trim()}`, W - M - 18, 13).length);
+      itemH += 20 + noteLines * 18;
+    }
   });
   // แถวข้อมูลลูกค้า: นับตามข้อมูลจริง (ชื่อ + เบอร์โทร + วิธีรับ + ชำระเงิน [+ เวลาจัดส่ง ถ้ามีวันเวลาหรือส่งตอนนี้])
   const infoRows =
@@ -2807,7 +2826,16 @@ function drawOrderReceipt(order, shopName) {
 
   info.forEach(([k, v]) => {
     text(k, M, y, 14, 600, "#6B5642");
-    text(v, W - M, y, 14, 500, "#3A2A1E", "right");
+    // ค่าฝั่งขวาอาจยาวเกินพื้นที่ที่เหลือได้ (ชื่อลูกค้ายาวๆ, ที่อยู่ยาวๆ) — ตัดด้วย "…" แทนที่จะปล่อยให้ไหล
+    // ล้นออกไปทับกับป้าย/ขอบใบ ซึ่งจะมองไม่เห็นข้อความบางส่วนไปเลยในภาพที่ export ออกมา
+    ctx.font = "500 14px 'Itim', sans-serif";
+    const maxValW = W - 2 * M - ctx.measureText(k).width - 16;
+    let vDisplay = v;
+    if (ctx.measureText(vDisplay).width > maxValW) {
+      while (vDisplay.length > 1 && ctx.measureText(vDisplay + "…").width > maxValW) vDisplay = vDisplay.slice(0, -1);
+      vDisplay += "…";
+    }
+    text(vDisplay, W - M, y, 14, 500, "#3A2A1E", "right");
     y += 27;
   });
 
@@ -2827,7 +2855,7 @@ function drawOrderReceipt(order, shopName) {
 
   items.forEach((i) => {
     const itemTotal = i.price * i.qty;
-    text(`฿${itemTotal}`, W - M, y, 16, 600, "#3A2A1E", "right");
+    text(`฿${fmtBaht(itemTotal)}`, W - M, y, 16, 600, "#3A2A1E", "right");
     // ชื่อเมนู + จำนวน — ถ้ายาวให้ขึ้นบรรทัดใหม่ (สูงสุด 2 บรรทัด)
     const lines = wrap(`${i.name} × ${i.qty}`, W - M - 150, 16).slice(0, 2);
     lines.forEach((ln, idx) => {
@@ -2837,13 +2865,18 @@ function drawOrderReceipt(order, shopName) {
     if (i.addOns && i.addOns.length) {
       i.addOns.forEach((a) => {
         text(`+ ${a.name}`, M + 18, y, 14, 400, "#8A4A1F");
-        text(`฿${a.price || 0}`, W - M, y, 14, 400, "#8A4A1F", "right");
+        text(`฿${fmtBaht(a.price || 0)}`, W - M, y, 14, 400, "#8A4A1F", "right");
         y += 22;
       });
     }
     if (i.note && i.note.trim()) {
-      text(`หมายเหตุ: ${i.note.trim()}`, M + 18, y, 13, 400, "#B5652E");
-      y += 30;
+      const allNoteLines = wrap(`หมายเหตุ: ${i.note.trim()}`, W - M - 18, 13);
+      const noteLines = allNoteLines.slice(0, 3);
+      const truncated = allNoteLines.length > 3;
+      noteLines.forEach((ln, idx) => {
+        text(idx === 2 && truncated ? ln + "…" : ln, M + 18, y + idx * 18, 13, 400, "#B5652E");
+      });
+      y += 20 + noteLines.length * 18;
     }
   });
 
@@ -2858,12 +2891,12 @@ function drawOrderReceipt(order, shopName) {
   if (discount > 0) {
     const discountLabel = (order && order.discount && order.discount.label) || "ส่วนลดโค้ด";
     text(discountLabel, M, y, 14, 500, "#6B5642");
-    text(`-฿${discount}`, W - M, y, 14, 600, "#6B5642", "right");
+    text(`-฿${fmtBaht(discount)}`, W - M, y, 14, 600, "#6B5642", "right");
     y += 24;
   }
 
   text("ยอดรวม", M, y, 20, 700, "#3A2A1E");
-  text(`฿${total}`, W - M, y, 22, 700, "#B5652E", "right");
+  text(`฿${fmtBaht(total)}`, W - M, y, 22, 700, "#B5652E", "right");
   y += 44;
 
   // ท้ายใบ
@@ -4220,7 +4253,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                     </p>
                     {(item.cost != null || (item.recipe && Object.keys(item.recipe).length > 0)) && (
                       <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-0.5">
-                        {item.cost != null ? `ต้นทุน ฿${item.cost}/หน่วย` : ""}
+                        {item.cost != null ? `ต้นทุน ฿${fmtBaht(item.cost)}/หน่วย` : ""}
                         {item.cost != null && Object.keys(item.recipe || {}).length > 0 ? " · " : ""}
                         {Object.keys(item.recipe || {}).length > 0 ? `ใช้วัตถุดิบ ${Object.keys(item.recipe).length} รายการ` : ""}
                       </p>
@@ -9466,6 +9499,16 @@ function App() {
   const removeStaffUid = async (targetUid) => {
     if (!targetUid || !FIREBASE_SYNC_ENABLED) return null;
     try {
+      // เช็คจำนวนพนักงานที่เหลือจากเซิร์ฟเวอร์จริง ๆ ก่อนลบ (ไม่ใช่แค่เช็คจาก state ที่แคชไว้ในเครื่อง)
+      // ลดโอกาสเคส 2 เครื่องกดลบพนักงานคนละคนพร้อมกันตอนเหลือแค่ 2 คน ซึ่งฝั่ง UI แต่ละเครื่องคิดว่าปลอดภัย
+      // (เพราะยังเห็นอีกคนเหลืออยู่) แต่พอลบพร้อมกันทั้งคู่จะกลายเป็นไม่เหลือใครมีสิทธิ์เข้าหน้าพนักงานเลย
+      // ต้องเข้า Firebase Console เพิ่ม uid เองใหม่ถึงจะกู้กลับมาได้ (เหมือนตอนบูตสโตรปเครื่องแรกของร้าน)
+      // หมายเหตุ: อ่าน-แล้ว-ลบ แบบนี้ยังไม่ใช่ atomic 100% (Firestore transaction ใช้กับ query ทั้ง
+      // collection ตรงๆ แบบนี้ไม่ได้) แค่ลดช่วงเวลาที่จะชนกันให้แคบลงมาก จากเดิมที่ไม่มีการเช็คจากเซิร์ฟเวอร์เลย
+      const snap = await db.collection("staffUids").get();
+      if (snap.size <= 1) {
+        return "ไม่สามารถลบได้ — เหลือพนักงานที่มีสิทธิ์แค่คนเดียว (เช็คจากเซิร์ฟเวอร์ล่าสุด) ต้องมีอย่างน้อย 1 คนเสมอ";
+      }
       await db.collection("staffUids").doc(targetUid).delete();
       return null;
     } catch (err) {
