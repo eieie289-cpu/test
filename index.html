@@ -669,10 +669,13 @@ const computeRuleCartDiscount = (cart, promos, ctx) => {
         baht = Number((tier && tier.amount) || 0);
         label = `ซื้อครบ ${tier ? tier.min : ""} ชิ้น ลด ${ruleAmtText(baht, false)}`;
       } else if (r.conds.includes("byoc")) {
-        // ให้ป้ายบอกชัดเจนว่าเป็นส่วนลด "นำแก้วมาเอง" (ไม่ใช่แค่ "ลด ฿X" เฉยๆ) — สอดคล้องกับที่ช่องติ๊ก
+        // ให้ป้ายบอกชัดเจนว่าเป็นส่วนลด "นำแก้วมาเอง" (ไม่ใช่แค่ "ลด ฿X" เฉยๆ) — สอดคล้องกับที่ตัวเลือกจำนวนแก้ว
         // นำแก้วมาเองบนหน้าจอแสดงไว้แล้ว กันลูกค้า/พนักงานสับสนว่าเป็นส่วนลดจากไหน
-        baht = Number(r.actionAmount) || 0;
-        label = `นำแก้วมาเอง ลด ${ruleAmtText(baht, false)}`;
+        // ส่วนลดคิดต่อแก้ว — คูณด้วยจำนวนแก้วที่ลูกค้าเลือกว่านำมาเอง (ctx.bringCup)
+        const byocQty = Number((ctx && ctx.bringCup) || 0);
+        const perCup = Number(r.actionAmount) || 0;
+        baht = perCup * byocQty;
+        label = `นำแก้วมาเอง ${byocQty} แก้ว ลด ${ruleAmtText(baht, false)}`;
       } else if (r.action === "percent") {
         baht = Math.round(subtotal * (Number(r.actionAmount) || 0)) / 100;
         label = `ลด ${ruleAmtText(Number(r.actionAmount) || 0, true)}`;
@@ -2044,10 +2047,16 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
   const [promoCode, setPromoCode] = useState("");
   const [appliedPromo, setAppliedPromo] = useState(null);
   const [promoError, setPromoError] = useState(""); // ข้อความ error ของโค้ดส่วนลด ("" = ไม่มี) — เช่น ใช้ครบแล้ว / 1 ครั้งต่อคน
-  const [bringCup, setBringCup] = useState(false); // ลูกค้าติ๊ก "นำแก้วมาเอง" เพื่อรับส่วนลด
+  const [bringCup, setBringCup] = useState(0); // จำนวนแก้วที่ลูกค้านำมาเอง (0 = ไม่นำมา) — เดิมเป็น checkbox ใบเดียว ตอนนี้เลือกจำนวนได้ต่อออร์เดอร์
   // ปัดยอดรวมตะกร้าให้สะอาดตั้งแต่ต้นทาง — ใช้เทียบ >= กับเกณฑ์ "ซื้อครบ" ด้วย (เดียวกับที่แก้ใน CustomerView)
   // ถ้าไม่ปัด อาจมีเศษ float ตกค้าง (299.99999999999994 แทนที่จะเป็น 300 พอดี) ทำให้ปฏิเสธส่วนลดที่ควรได้
   const subtotal = Math.round(cart.reduce((sum, c) => sum + c.price * c.qty, 0) * 100) / 100;
+  // จำนวนชิ้นทั้งหมดในตะกร้า (รวมทุกเมนู) — ใช้เป็นเพดานสูงสุดของจำนวนแก้วที่นำมาเอง
+  const cartTotalQty = cart.reduce((sum, c) => sum + (Number(c.qty) || 0), 0);
+  // ถ้าตะกร้าเปลี่ยน (เช่น ลดจำนวน/ลบสินค้า) แล้วจำนวนแก้วที่ติ๊กไว้เกินจำนวนชิ้นที่เหลือ ให้ลดตามลงมาอัตโนมัติ
+  useEffect(() => {
+    setBringCup((n) => Math.min(n, cartTotalQty));
+  }, [cartTotalQty]);
   // โปรโมชั่น "นำแก้วมาเอง" ที่เปิดใช้ — ลูกค้าติ๊กในหน้าชำระเงินเพื่อรับส่วนลด
   // รองรับทั้งโปรเก่า (type: byoc) และโปรตัวต่อ (เงื่อนไข byoc)
   const byocPromo = (promos || []).find(
@@ -2073,7 +2082,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
   // ถ้าหักซ้ำที่นี่อีกจะกลายเป็นหัก 2 เท่า (บั๊กที่เจอ: สร้างโปรนำแก้วมาเองลด 5 บาทใหม่ แต่ยอดหักจริงออกมา 10 บาท
   // เพราะ byocBaht กับ ruleCartDiscount.baht ต่างก็หักให้จากโปรตัวเดียวกันพร้อมกันโดยไม่รู้ตัว)
   const byocIsLegacy = !!(byocPromo && !byocPromo.rules);
-  const byocBaht = byocIsLegacy && bringCup && (!byocPickupOnly || deliveryMethod === "pickup") ? Math.min(byocBahtValue, subtotal) : 0;
+  const byocBaht = byocIsLegacy && bringCup > 0 && (!byocPickupOnly || deliveryMethod === "pickup") ? Math.min(byocBahtValue * bringCup, subtotal) : 0;
   // โปรโมชั่น "ซื้อครบ" — หักให้อัตโนมัติเมื่อยอดรวมถึงเกณฑ์ (ลูกค้าไม่ต้องทำอะไร)
   const thresholdPromo = (promos || []).find((p) => p && p.active && p.type === "threshold");
   const thresholdMet = !!thresholdPromo && subtotal >= (Number(thresholdPromo.minSpend) || 0);
@@ -2097,7 +2106,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
   // ป้ายสรุปส่วนลด เช่น "ซื้อครบ + นำแก้วมาเอง + โค้ด SAVE5 + 1แถม1 (ฟรี 1 ชิ้น)"
   const discountSummaryLabel = [
     thresholdBaht > 0 ? "ซื้อครบ" : null,
-    byocBaht > 0 ? "นำแก้วมาเอง" : null,
+    byocBaht > 0 ? `นำแก้วมาเอง ${bringCup} แก้ว` : null,
     appliedPromo ? `โค้ด ${promoCodeText(appliedPromo)}` : null,
     ruleCartDiscount.label || null,
   ]
@@ -2281,25 +2290,40 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
           </div>
         ))}
         <div style={{ borderTop: `1px dashed ${COLORS.line}` }} className="pt-3 mt-2">
-          {/* นำแก้วมาเอง — ลูกค้าติ๊กเพื่อรับส่วนลด (เฉพาะรับที่ร้าน หรือทั้งสองแบบ ตามที่ร้านตั้งไว้) */}
+          {/* นำแก้วมาเอง — ลูกค้าเลือกจำนวนแก้วที่นำมาเองได้ (ไม่เกินจำนวนชิ้นทั้งหมดในตะกร้า) เพื่อรับส่วนลดต่อแก้ว */}
           {byocPromo && (!byocPickupOnly || deliveryMethod === "pickup") && (
-            <button
-              type="button"
-              onClick={() => setBringCup(!bringCup)}
-              className="w-full flex items-center justify-between rounded-xl px-3 py-2.5 mb-2"
-              style={{ border: `1px solid ${bringCup ? COLORS.sage : COLORS.line}`, background: bringCup ? COLORS.sageSoft : "#FFFFFF" }}
+            <div
+              className="w-full flex items-center justify-between rounded-xl px-3 py-2.5 mb-2 gap-2"
+              style={{ border: `1px solid ${bringCup > 0 ? COLORS.sage : COLORS.line}`, background: bringCup > 0 ? COLORS.sageSoft : "#FFFFFF" }}
             >
-              <span className="flex items-center gap-2">
-                <span
-                  style={{ border: `2px solid ${bringCup ? COLORS.sage : COLORS.line}`, background: bringCup ? COLORS.sage : "transparent" }}
-                  className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
-                >
-                  {bringCup && <Check size={10} color="#fff" />}
+              <span className="flex flex-col min-w-0">
+                <span style={{ color: COLORS.ink }} className="text-sm font-medium break-words">{byocPromo.name || "นำแก้วมาเอง"}</span>
+                <span style={{ color: COLORS.inkSoft }} className="text-[11px]">
+                  ฿{fmtBaht(byocBahtValue)}/แก้ว{bringCup > 0 ? ` · นำมา ${bringCup} แก้ว ลด ฿${fmtBaht(byocBahtValue * bringCup)}` : ""}
                 </span>
-                <span style={{ color: COLORS.ink }} className="text-sm font-medium min-w-0 break-words">{byocPromo.name || "นำแก้วมาเอง"}</span>
               </span>
-              <span style={{ color: COLORS.sage }} className="text-xs font-bold">ลด ฿{fmtBaht(byocBahtValue)}</span>
-            </button>
+              <span className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setBringCup((n) => Math.max(0, n - 1))}
+                  disabled={bringCup <= 0}
+                  style={{ border: `1px solid ${COLORS.line}`, color: bringCup <= 0 ? COLORS.inkSoft : COLORS.ink, opacity: bringCup <= 0 ? 0.5 : 1 }}
+                  className="w-7 h-7 rounded-full flex items-center justify-center"
+                >
+                  <Minus size={13} />
+                </button>
+                <span style={{ color: COLORS.ink }} className="text-sm font-bold w-5 text-center">{bringCup}</span>
+                <button
+                  type="button"
+                  onClick={() => setBringCup((n) => Math.min(cartTotalQty, n + 1))}
+                  disabled={bringCup >= cartTotalQty}
+                  style={{ border: `1px solid ${COLORS.line}`, color: bringCup >= cartTotalQty ? COLORS.inkSoft : COLORS.ink, opacity: bringCup >= cartTotalQty ? 0.5 : 1 }}
+                  className="w-7 h-7 rounded-full flex items-center justify-center"
+                >
+                  <Plus size={13} />
+                </button>
+              </span>
+            </div>
           )}
           {byocPromo && byocPickupOnly && deliveryMethod === "delivery" && (
             <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-2">
@@ -2378,7 +2402,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
               <button
                 key={m.id}
                 type="button"
-                onClick={() => { setDeliveryMethod(m.id); setCustError(false); if (m.id !== "pickup" && byocPickupOnly) setBringCup(false); }}
+                onClick={() => { setDeliveryMethod(m.id); setCustError(false); if (m.id !== "pickup" && byocPickupOnly) setBringCup(0); }}
                 style={{
                   flex: 1,
                   background: deliveryMethod === m.id ? COLORS.peachSoft : "#FFFFFF",
