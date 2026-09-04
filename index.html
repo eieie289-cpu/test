@@ -45,7 +45,7 @@ const COLORS = {
   peachSoft: "#FCE0C4",
   ink: "#3A2A1E",
   inkSoft: "#6B5642",
-  sage: "#7A8B6F",
+  sage: "#5C6953",
   sageSoft: "#E4EADD",
   line: "#E4D3B8",
 };
@@ -668,6 +668,11 @@ const computeRuleCartDiscount = (cart, promos, ctx) => {
         const tier = bestTier(r.minQtyTiers, cartQty);
         baht = Number((tier && tier.amount) || 0);
         label = `ซื้อครบ ${tier ? tier.min : ""} ชิ้น ลด ${ruleAmtText(baht, false)}`;
+      } else if (r.conds.includes("byoc")) {
+        // ให้ป้ายบอกชัดเจนว่าเป็นส่วนลด "นำแก้วมาเอง" (ไม่ใช่แค่ "ลด ฿X" เฉยๆ) — สอดคล้องกับที่ช่องติ๊ก
+        // นำแก้วมาเองบนหน้าจอแสดงไว้แล้ว กันลูกค้า/พนักงานสับสนว่าเป็นส่วนลดจากไหน
+        baht = Number(r.actionAmount) || 0;
+        label = `นำแก้วมาเอง ลด ${ruleAmtText(baht, false)}`;
       } else if (r.action === "percent") {
         baht = Math.round(subtotal * (Number(r.actionAmount) || 0)) / 100;
         label = `ลด ${ruleAmtText(Number(r.actionAmount) || 0, true)}`;
@@ -975,7 +980,7 @@ function PaymentStatusBadge({ order, onMarkPaid, onUnmarkPaid }) {
                 </button>
                 <button
                   onClick={() => { setConfirmRevert(false); onUnmarkPaid(order.id); }}
-                  style={{ background: "#C0533F", color: "#FFF" }}
+                  style={{ background: "#A0432F", color: "#FFF" }}
                   className="flex-1 text-xs font-semibold py-2.5 rounded-xl"
                 >
                   ย้อนกลับ
@@ -990,7 +995,7 @@ function PaymentStatusBadge({ order, onMarkPaid, onUnmarkPaid }) {
   return (
     <span className="inline-flex items-center gap-1.5 flex-wrap">
       <span
-        style={{ background: "#F3D9D3", color: "#C0533F" }}
+        style={{ background: "#F3D9D3", color: "#A0432F" }}
         className="text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1 whitespace-nowrap"
       >
         <Banknote size={11} /> ยังไม่จ่าย · เก็บ ฿{fmtBaht(total)}
@@ -1619,7 +1624,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, onCheckOrders, shopOpen
                     )}
                     ฿{fmtBaht(discountedPrice)}
                     {hasDiscount && (
-                      <span style={{ background: "#F3D9D3", color: "#C0533F" }} className="text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-1.5 align-middle">
+                      <span style={{ background: "#F3D9D3", color: "#A0432F" }} className="text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-1.5 align-middle">
                         {discountLabelFor(item, promos, nowTs)}
                       </span>
                     )}
@@ -1837,7 +1842,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, onCheckOrders, shopOpen
                 ))}
               </div>
               {missingRequired && (
-                <p className="text-xs mb-2" style={{ color: "#C0533F" }}>
+                <p className="text-xs mb-2" style={{ color: "#A0432F" }}>
                   กรุณาเลือกอย่างน้อย 1 รายการในกลุ่มที่บังคับ
                 </p>
               )}
@@ -1950,7 +1955,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, onCheckOrders, shopOpen
                       )}
                       <button
                         onClick={() => removeCartItem(item.cartId)}
-                        style={{ color: "#C0533F" }}
+                        style={{ color: "#A0432F" }}
                         className="text-xs font-semibold flex-shrink-0"
                       >
                         ลบ
@@ -2048,7 +2053,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
   const byocPromo = (promos || []).find(
     (p) => p && p.active && (p.type === "byoc" || (p.rules && (p.rules.conds || []).includes("byoc")))
   );
-  // จำนวนส่วนลดนำแก้วมาเอง (โปรตัวต่ออ่านจาก rules.actionAmount)
+  // จำนวนส่วนลดนำแก้วมาเอง (โปรตัวต่ออ่านจาก rules.actionAmount) — ใช้แค่โชว์ตัวเลขบนช่องติ๊กเท่านั้น
   const byocBahtValue = byocPromo
     ? byocPromo.rules
       ? Number(byocPromo.rules.actionAmount) || 0
@@ -2063,7 +2068,12 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
   // นำแก้วมาเอง — ปกติใช้ได้เฉพาะรับที่ร้าน (ลูกค้าที่สั่งจัดส่งเอาแก้วไปส่งไม่ได้)
   // แต่พนักงานตั้งได้ว่าให้ใช้ได้ทั้งสองแบบ (pickupOnly = false)
   const byocPickupOnly = byocPromo ? (byocPromo.rules ? byocPromo.rules.pickupOnly !== false : byocPromo.pickupOnly !== false) : true;
-  const byocBaht = bringCup && byocPromo && (!byocPickupOnly || deliveryMethod === "pickup") ? Math.min(byocBahtValue, subtotal) : 0;
+  // หักส่วนลดนำแก้วมาเองจริง ๆ เฉพาะโปรแบบเก่า (type: "byoc") เท่านั้น — โปรตัวต่อ (rules.conds มี "byoc")
+  // ถูกนับผ่าน ruleCartDiscount ด้านล่างอยู่แล้ว (เงื่อนไข byoc ถูกเช็คซ้ำใน ruleCartConditionsMet ด้วย)
+  // ถ้าหักซ้ำที่นี่อีกจะกลายเป็นหัก 2 เท่า (บั๊กที่เจอ: สร้างโปรนำแก้วมาเองลด 5 บาทใหม่ แต่ยอดหักจริงออกมา 10 บาท
+  // เพราะ byocBaht กับ ruleCartDiscount.baht ต่างก็หักให้จากโปรตัวเดียวกันพร้อมกันโดยไม่รู้ตัว)
+  const byocIsLegacy = !!(byocPromo && !byocPromo.rules);
+  const byocBaht = byocIsLegacy && bringCup && (!byocPickupOnly || deliveryMethod === "pickup") ? Math.min(byocBahtValue, subtotal) : 0;
   // โปรโมชั่น "ซื้อครบ" — หักให้อัตโนมัติเมื่อยอดรวมถึงเกณฑ์ (ลูกค้าไม่ต้องทำอะไร)
   const thresholdPromo = (promos || []).find((p) => p && p.active && p.type === "threshold");
   const thresholdMet = !!thresholdPromo && subtotal >= (Number(thresholdPromo.minSpend) || 0);
@@ -2306,7 +2316,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
               }}
               placeholder="ใส่โค้ดส่วนลด (ถ้ามี)"
               style={{
-                border: `1px solid ${promoError ? "#C0533F" : COLORS.line}`,
+                border: `1px solid ${promoError ? "#A0432F" : COLORS.line}`,
                 color: COLORS.ink,
                 textTransform: "uppercase",
               }}
@@ -2325,7 +2335,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
             </button>
           </div>
           {promoError && (
-            <p style={{ color: "#C0533F" }} className="text-[11px] font-semibold mb-1">
+            <p style={{ color: "#A0432F" }} className="text-[11px] font-semibold mb-1">
               {promoError}
             </p>
           )}
@@ -2357,7 +2367,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
       </div>
 
       <p style={{ color: COLORS.inkSoft }} className="text-xs font-semibold mb-2 px-1">ข้อมูลการรับออเดอร์</p>
-      <div ref={custFormRef} style={{ background: "#FFFFFF", border: `1px solid ${custError ? "#C0533F" : COLORS.line}` }} className="rounded-2xl p-4 mb-4 space-y-3">
+      <div ref={custFormRef} style={{ background: "#FFFFFF", border: `1px solid ${custError ? "#A0432F" : COLORS.line}` }} className="rounded-2xl p-4 mb-4 space-y-3">
         <div>
           <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium mb-1 block">วิธีการรับ</label>
           <div className="flex gap-2">
@@ -2403,7 +2413,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
             value={custPhone}
             onChange={(e) => { setCustPhone(formatPhoneInput(e.target.value)); setCustError(false); setPhoneError(false); }}
             placeholder="เช่น 081-234-5678"
-            style={{ border: `1.5px solid ${phoneError ? "#C0533F" : COLORS.line}`, color: COLORS.ink }}
+            style={{ border: `1.5px solid ${phoneError ? "#A0432F" : COLORS.line}`, color: COLORS.ink }}
             className="w-full rounded-xl px-3.5 py-2.5 text-sm outline-none"
           />
         </div>
@@ -2492,7 +2502,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
                           ตอนนี้เวลา {nowStr} น. — วันนี้เหลือเวลาจัดส่ง {remainingSlotsToday.length} ช่วงเวลา
                         </p>
                       ) : (
-                        <p style={{ color: "#C0533F" }} className="text-xs mt-1.5">
+                        <p style={{ color: "#A0432F" }} className="text-xs mt-1.5">
                           วันนี้หมดเวลาจัดส่งแล้ว ({nowStr} น.) — กรุณาเลือกวันพรุ่งนี้หรือวันถัดไป
                         </p>
                       )
@@ -2525,7 +2535,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
           </p>
         )}
         {custError && (
-          <p className="text-xs" style={{ color: "#C0533F" }}>
+          <p className="text-xs" style={{ color: "#A0432F" }}>
             {phoneError
               ? "เบอร์โทรไม่ถูกต้อง — ต้องเป็นเบอร์ 10 หลัก ขึ้นต้น 0 เช่น 081-234-5678"
               : deliveryTimeExpiredError
@@ -2627,7 +2637,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
               >
                 <UploadCloud size={14} style={{ transform: "rotate(180deg)" }} /> บันทึกรูป QR ลงเครื่อง
               </a>
-              <p style={{ color: "#C0533F" }} className="text-[11px] font-semibold mt-2 leading-relaxed">
+              <p style={{ color: "#A0432F" }} className="text-[11px] font-semibold mt-2 leading-relaxed">
                 กรุณาตรวจสอบยอดชำระให้ตรงกับที่สั่ง และตรวจชื่อก่อนโอนนะครับ
               </p>
             </div>
@@ -3003,7 +3013,7 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, onCheckOrders, paymen
         {receiptState === "saving" ? "กำลังสร้างภาพ..." : "บันทึกหลักฐานการสั่ง (ภาพ)"}
       </button>
       {receiptState === "error" && (
-        <p style={{ color: "#C0533F" }} className="text-xs font-semibold mt-2">
+        <p style={{ color: "#A0432F" }} className="text-xs font-semibold mt-2">
           สร้างภาพไม่สำเร็จ ลองอีกครั้งนะครับ
         </p>
       )}
@@ -3076,11 +3086,11 @@ function MyOrdersView({ onBack }) {
 
   const statusMeta = {
     new: { label: "ได้รับออร์เดอร์แล้ว", color: COLORS.caramel, bg: COLORS.peachSoft },
-    preparing: { label: "กำลังทำ", color: "#B08628", bg: "#F5EAC9" },
+    preparing: { label: "กำลังทำ", color: "#7A5918", bg: "#F5EAC9" },
     done: { label: "พร้อมแล้ว — รอจัดส่ง", color: COLORS.sage, bg: COLORS.sageSoft },
     delivered: { label: "จัดส่งสำเร็จแล้ว", color: "#FFFFFF", bg: COLORS.sage },
     received: { label: "รับสินค้าเรียบร้อยแล้ว", color: "#FFFFFF", bg: COLORS.sage },
-    cancelled: { label: "ออร์เดอร์นี้ถูกยกเลิก", color: "#C0533F", bg: "#F3D9D3" },
+    cancelled: { label: "ออร์เดอร์นี้ถูกยกเลิก", color: "#A0432F", bg: "#F3D9D3" },
   };
 
   // ฟัง (onSnapshot) ทุกออร์เดอร์ที่เครื่องนี้จำไว้แบบเรียลไทม์ — ฝั่งร้านเปลี่ยนสถานะปุ๊บ หน้าจอลูกค้าขยับตามทันที
@@ -3190,7 +3200,7 @@ function MyOrdersView({ onBack }) {
                 {(o.items || []).map((i) => `${i.name} × ${i.qty}`).join(", ")}
               </p>
               {o.status === "cancelled" && o.cancelReason && (
-                <p style={{ color: "#C0533F" }} className="text-xs mb-2">เหตุผล: {o.cancelReason}</p>
+                <p style={{ color: "#A0432F" }} className="text-xs mb-2">เหตุผล: {o.cancelReason}</p>
               )}
               <div className="flex items-center justify-between">
                 <span style={{ color: COLORS.inkSoft }} className="text-[11px]">
@@ -3988,7 +3998,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
           ช่วงเวลาจัดส่งที่ลูกค้าเลือกได้ (ทุก 30 นาที) — วันนี้จะเหลือเฉพาะเวลาที่ยังไม่ผ่านไปเท่านั้น ถ้าร้านเปิด 10 โมงก็ตั้งจัดส่งเริ่ม 10:00 ได้
         </p>
         {(openTimeInput >= closeTimeInput || deliveryOpenInput >= deliveryCloseInput) && (
-          <p style={{ color: "#C0533F" }} className="text-[11px] font-medium mt-1.5 leading-relaxed">
+          <p style={{ color: "#A0432F" }} className="text-[11px] font-medium mt-1.5 leading-relaxed">
             ⚠ เวลาปิด{openTimeInput >= closeTimeInput ? "ร้าน" : ""}
             {openTimeInput >= closeTimeInput && deliveryOpenInput >= deliveryCloseInput ? "/" : ""}
             {deliveryOpenInput >= deliveryCloseInput ? "จัดส่ง" : ""} ตั้งไว้ไม่หลังเวลาเปิดเลย — ตรวจดูอีกทีว่าพิมพ์ถูกไหม
@@ -4294,7 +4304,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
               <button
                 type="button"
                 onClick={deleteCatFromForm}
-                style={confirmDelCat === editingCat.id ? { background: "#C0533F", color: "#FFF" } : { border: `1px solid #C0533F`, color: "#C0533F" }}
+                style={confirmDelCat === editingCat.id ? { background: "#A0432F", color: "#FFF" } : { border: `1px solid #A0432F`, color: "#A0432F" }}
                 className="rounded-xl px-4 py-2.5 text-sm font-semibold flex-shrink-0"
               >
                 {confirmDelCat === editingCat.id ? "กดอีกครั้งเพื่อยืนยัน" : "ลบหมวด"}
@@ -4346,7 +4356,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                   {form.img && (
                     <button
                       onClick={() => setForm((f) => ({ ...f, img: "" }))}
-                      style={{ color: "#C0533F" }}
+                      style={{ color: "#A0432F" }}
                       className="text-xs font-semibold"
                     >
                       ลบรูป
@@ -4354,7 +4364,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                   )}
                 </div>
                 {photoError && (
-                  <p style={{ color: "#C0533F" }} className="text-[11px] font-medium mt-1.5">{photoError}</p>
+                  <p style={{ color: "#A0432F" }} className="text-[11px] font-medium mt-1.5">{photoError}</p>
                 )}
               </div>
               <div className="flex gap-2 flex-wrap">
@@ -4477,7 +4487,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                               return { ...f, recipe: next };
                             })
                           }
-                          style={{ color: "#C0533F" }}
+                          style={{ color: "#A0432F" }}
                           className="flex-shrink-0"
                         >
                           <Trash2 size={14} />
@@ -4589,7 +4599,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                               ? `⚠ มีตัวเลือกในกลุ่มนี้ที่ใช้ในโปรโมชั่นที่เปิดอยู่: ${refPromos.map((p) => p.name).join(", ")} — กดอีกครั้งเพื่อยืนยันลบทั้งกลุ่ม`
                               : undefined;
                           })()}
-                          style={{ color: "#C0533F" }}
+                          style={{ color: "#A0432F" }}
                           className="flex-shrink-0"
                         >
                           {confirmDelGroup === g.id ? <span className="text-[9px] font-bold px-1">ยืนยัน?</span> : <Trash2 size={14} />}
@@ -4670,7 +4680,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                                       ? `⚠ ใช้ในโปรโมชั่นที่เปิดอยู่: ${promosReferencingAddOn(o.id, promos).map((p) => p.name).join(", ")} — กดอีกครั้งเพื่อยืนยันลบ`
                                       : undefined
                                   }
-                                  style={{ color: "#C0533F" }}
+                                  style={{ color: "#A0432F" }}
                                   className="flex-shrink-0"
                                 >
                                   {confirmDelOption === o.id ? <span className="text-[9px] font-bold px-1">ยืนยัน?</span> : <Trash2 size={14} />}
@@ -4733,7 +4743,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                                         delete recipe[sid];
                                         updateOption(g.id, o.id, { recipe });
                                       }}
-                                      style={{ color: "#C0533F" }}
+                                      style={{ color: "#A0432F" }}
                                       className="flex-shrink-0"
                                     >
                                       <X size={12} />
@@ -4830,14 +4840,14 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
               const refPromos = promosReferencingMenuItem(editing, promos);
               if (!refPromos.length) return null;
               return (
-                <p style={{ color: "#C0533F" }} className="text-[11px] font-medium mt-2">
+                <p style={{ color: "#A0432F" }} className="text-[11px] font-medium mt-2">
                   ⚠ เมนูนี้ถูกใช้ในโปรโมชั่นที่เปิดอยู่: {refPromos.map((p) => p.name).join(", ")} — ลบแล้วโปรนั้นจะหยุดหักส่วนลดให้เมนูนี้ทันที (โปรไม่ได้ถูกลบ แค่ใช้กับเมนูนี้ไม่ได้อีก)
                 </p>
               );
             })()}
 
             {(form.addOns || []).some((g) => g.required && (g.options || []).length === 0) && (
-              <p style={{ color: "#C0533F" }} className="text-[11px] font-medium mt-2">
+              <p style={{ color: "#A0432F" }} className="text-[11px] font-medium mt-2">
                 ⚠ มีกลุ่มตัวเลือกที่ตั้ง "บังคับเลือก" แต่ยังไม่มีตัวเลือกย่อยอยู่เลย (เช่น กลุ่มที่ชื่อ "
                 {(form.addOns || []).find((g) => g.required && (g.options || []).length === 0)?.name || "…"}
                 ") — ลูกค้าจะกดสั่งเมนูนี้ไม่ได้เลย เพิ่มตัวเลือกย่อยอย่างน้อย 1 อัน หรือปิด "บังคับเลือก" ก่อนบันทึก
@@ -4857,7 +4867,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                     setConfirmDelMenu(false);
                     remove(editing);
                   }}
-                  style={confirmDelMenu ? { background: "#C0533F", color: "#FFF" } : { border: `1px solid #C0533F`, color: "#C0533F" }}
+                  style={confirmDelMenu ? { background: "#A0432F", color: "#FFF" } : { border: `1px solid #A0432F`, color: "#A0432F" }}
                   className="rounded-xl px-4 py-2.5 text-sm font-semibold flex items-center gap-1.5 flex-shrink-0"
                 >
                   <Trash2 size={15} /> {confirmDelMenu ? "กดอีกครั้งเพื่อยืนยัน" : "ลบเมนู"}
@@ -4875,7 +4885,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
 }
 
 // ================= STAFF ORDERS VIEW =================
-function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive, onTransferGoods, onUntagTransfer, onDelete, onDeleteOrders, onMarkPaid, onUnmarkPaid }) {
+function StaffOrdersView({ orders, ordersLoaded, recentOrderIds, onAdvance, onCancel, onRevive, onTransferGoods, onUntagTransfer, onDelete, onDeleteOrders, onMarkPaid, onUnmarkPaid }) {
   const [zoomedSlip, setZoomedSlip] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null); // order id รอ confirm ลบรายตัว
   const [deletePickOpen, setDeletePickOpen] = useState(false); // เปิดชีตติ๊กเลือกออร์เดอร์ที่จะลบ
@@ -4921,11 +4931,11 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
 
   const statusMeta = {
     new: { label: "ออร์เดอร์ใหม่", color: COLORS.caramel, bg: COLORS.peachSoft, action: "เริ่มทำ" },
-    preparing: { label: "กำลังทำ", color: "#B08628", bg: "#F5EAC9", action: "เสร็จแล้ว" },
+    preparing: { label: "กำลังทำ", color: "#7A5918", bg: "#F5EAC9", action: "เสร็จแล้ว" },
     done: { label: "เสร็จแล้ว", color: COLORS.sage, bg: COLORS.sageSoft, action: null },
     delivered: { label: "จัดส่งเสร็จแล้ว", color: "#FFFFFF", bg: COLORS.sage, action: null },
     received: { label: "รับสินค้าแล้ว", color: "#FFFFFF", bg: COLORS.sage, action: null },
-    cancelled: { label: "ยกเลิกแล้ว", color: "#C0533F", bg: "#F3D9D3", action: null },
+    cancelled: { label: "ยกเลิกแล้ว", color: "#A0432F", bg: "#F3D9D3", action: null },
   };
 
   // เรียงแบบคิว (FIFO): ออร์เดอร์เก่าอยู่บนสุด — ออร์เดอร์ใหม่ที่เพิ่งเข้ามาต่อคิวล่าง (ไม่เด้งขึ้นบน)
@@ -4974,7 +4984,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                 setDeleteCancelPickOpen(true);
                 setDeleteCancelPickIds([]);
               }}
-              style={{ color: "#C0533F", border: "1px solid #E3B7AC" }}
+              style={{ color: "#A0432F", border: "1px solid #E3B7AC" }}
               className="text-[11px] font-semibold px-2.5 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0"
             >
               <Trash2 size={12} /> ลบที่ยกเลิก ({cancelledCount})
@@ -4986,7 +4996,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                 setDeletePickOpen(true);
                 setDeletePickIds([]);
               }}
-              style={{ color: "#C0533F", border: "1px solid #E3B7AC" }}
+              style={{ color: "#A0432F", border: "1px solid #E3B7AC" }}
               className="text-[11px] font-semibold px-2.5 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0"
             >
               <Trash2 size={12} /> ลบที่เสร็จแล้ว ({finishedCount})
@@ -5000,7 +5010,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
       {unstartedNewCount > 0 && (
         <div
           style={{
-            background: "linear-gradient(135deg, #C0533F, #A8442F)",
+            background: "linear-gradient(135deg, #A0432F, #A8442F)",
             boxShadow: "0 6px 18px rgba(192,83,63,0.35)",
           }}
           className="rounded-2xl px-4 py-3 mb-4 flex items-center gap-3"
@@ -5019,7 +5029,14 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
         </div>
       )}
 
-      {sorted.length === 0 && (
+      {!ordersLoaded && (
+        <div className="text-center py-20" style={{ color: COLORS.inkSoft }}>
+          <Loader2 size={28} className="mx-auto mb-2 animate-spin" />
+          กำลังโหลดออร์เดอร์...
+        </div>
+      )}
+
+      {ordersLoaded && sorted.length === 0 && (
         <div className="text-center py-20" style={{ color: COLORS.inkSoft }}>
           <ChefHat size={32} className="mx-auto mb-2 opacity-50" />
           ยังไม่มีออร์เดอร์เข้ามา
@@ -5054,7 +5071,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                   {/* ป้าย "ใหม่!" ค้างจนกว่าจะกด "เริ่มทำ" (สถานะยังเป็น new) — ไม่หายเองตามเวลา */}
                   {order.status === "new" && (
                     <span
-                      style={{ background: "#C0533F", color: "#FFF9F0" }}
+                      style={{ background: "#A0432F", color: "#FFF9F0" }}
                       className="text-[10px] font-bold px-2 py-1 rounded-full animate-pulse flex-shrink-0"
                     >
                       ใหม่!
@@ -5221,7 +5238,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                   {(order.status === "new" || order.status === "preparing" || order.status === "done") && (
                     <button
                       onClick={() => { setConfirmCancelId(order.id); setCancelReason(""); }}
-                      style={{ color: "#C0533F", border: "1px solid #E3B7AC", background: "#FFFFFF" }}
+                      style={{ color: "#A0432F", border: "1px solid #E3B7AC", background: "#FFFFFF" }}
                       className="text-xs font-semibold px-3.5 py-2 rounded-full flex items-center gap-1 active:scale-95 transition-transform"
                     >
                       <X size={12} /> ยกเลิก
@@ -5298,7 +5315,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
               </button>
               <button
                 onClick={() => { onDelete(confirmDeleteId); setConfirmDeleteId(null); }}
-                style={{ background: "#C0533F", color: "#FFF9F0" }}
+                style={{ background: "#A0432F", color: "#FFF9F0" }}
                 className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
               >
                 ลบเลย
@@ -5401,7 +5418,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                 }}
                 disabled={deletePickIds.length === 0}
                 style={{
-                  background: deletePickIds.length > 0 ? "#C0533F" : "#D8C9B8",
+                  background: deletePickIds.length > 0 ? "#A0432F" : "#D8C9B8",
                   color: "#FFF9F0",
                 }}
                 className="flex-1 rounded-xl py-3 text-sm font-semibold disabled:cursor-not-allowed"
@@ -5447,7 +5464,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                   setDeletePickOpen(false);
                   setDeletePickIds([]);
                 }}
-                style={{ background: "#C0533F", color: "#FFF9F0" }}
+                style={{ background: "#A0432F", color: "#FFF9F0" }}
                 className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
               >
                 ลบเลย
@@ -5494,7 +5511,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
               <button
                 onClick={() => { onCancel(confirmCancelId, cancelReason); setConfirmCancelId(null); setCancelReason(""); }}
                 disabled={!cancelReason.trim()}
-                style={{ background: cancelReason.trim() ? "#C0533F" : "#D8C9B8", color: "#FFF9F0" }}
+                style={{ background: cancelReason.trim() ? "#A0432F" : "#D8C9B8", color: "#FFF9F0" }}
                 className="flex-1 rounded-xl py-2.5 text-sm font-semibold disabled:cursor-not-allowed"
               >
                 ยืนยันยกเลิก
@@ -5562,7 +5579,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                 (ใบที่รายการตรงกันมีป้ายเขียว "ตรงกับของที่มี")
               </p>
               <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pb-3" style={{ overscrollBehavior: "contain" }}>
-                {activeOrders.length === 0 && (
+                {ordersLoaded && activeOrders.length === 0 && (
                   <p style={{ color: COLORS.inkSoft }} className="text-xs py-8 text-center">
                     ยังไม่มีออร์เดอร์ที่กำลังทำอยู่
                   </p>
@@ -5771,7 +5788,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                 }}
                 disabled={deleteCancelPickIds.length === 0}
                 style={{
-                  background: deleteCancelPickIds.length > 0 ? "#C0533F" : "#D8C9B8",
+                  background: deleteCancelPickIds.length > 0 ? "#A0432F" : "#D8C9B8",
                   color: "#FFF9F0",
                 }}
                 className="flex-1 rounded-xl py-3 text-sm font-semibold disabled:cursor-not-allowed"
@@ -5815,7 +5832,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                   setDeleteCancelPickOpen(false);
                   setDeleteCancelPickIds([]);
                 }}
-                style={{ background: "#C0533F", color: "#FFF9F0" }}
+                style={{ background: "#A0432F", color: "#FFF9F0" }}
                 className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
               >
                 ลบเลย
@@ -5831,15 +5848,15 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
 // ================= STAFF DELIVERY VIEW (จัดเรียงตามวัน-เวลาจัดส่ง) =================
 // รวมออร์เดอร์ที่ยังไม่ยกเลิกทั้งหมด จัดกลุ่มตามวันที่จัดส่ง แล้วเรียงเวลาไล่จากเช้าไปเย็นในแต่ละวัน
 // ให้พนักงานเห็นภาพรวมว่าแต่ละวันต้องจัดส่งกี่ออร์เดอร์ เวลาไหนบ้าง วางแผนออกรอบส่งได้ง่ายขึ้น
-function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
+function StaffDeliveryView({ orders, ordersLoaded, onAdvance, onMarkPaid, onUnmarkPaid }) {
   const [confirmRevertId, setConfirmRevertId] = useState(null); // order id ที่รอป็อปอัพยืนยันย้อนกลับการจัดส่ง
   const statusMeta = {
     new: { label: "ออร์เดอร์ใหม่", color: COLORS.caramel, bg: COLORS.peachSoft, action: null },
-    preparing: { label: "กำลังทำ", color: "#B08628", bg: "#F5EAC9", action: null },
+    preparing: { label: "กำลังทำ", color: "#7A5918", bg: "#F5EAC9", action: null },
     done: { label: "เสร็จแล้ว", color: COLORS.sage, bg: COLORS.sageSoft, action: null },
     delivered: { label: "จัดส่งเสร็จแล้ว", color: "#FFFFFF", bg: COLORS.sage, action: null },
     received: { label: "รับสินค้าแล้ว", color: "#FFFFFF", bg: COLORS.sage, action: null },
-    cancelled: { label: "ยกเลิกแล้ว", color: "#C0533F", bg: "#F3D9D3", action: null },
+    cancelled: { label: "ยกเลิกแล้ว", color: "#A0432F", bg: "#F3D9D3", action: null },
   };
 
   // คิวจัดส่งแสดงเฉพาะออร์เดอร์ที่ทำเสร็จแล้ว (พร้อมจัดส่ง/พร้อมรับ) กับที่จบแล้ว (จัดส่งเสร็จ/รับสินค้าแล้ว)
@@ -6016,7 +6033,14 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
         เรียงตามวันและเวลาที่ลูกค้าเลือก · ทั้งหมด {totalScheduled} ออร์เดอร์
       </p>
 
-      {totalScheduled === 0 && unscheduled.length === 0 && pickups.length === 0 && (
+      {!ordersLoaded && (
+        <div className="text-center py-20" style={{ color: COLORS.inkSoft }}>
+          <Loader2 size={28} className="mx-auto mb-2 animate-spin" />
+          กำลังโหลดออร์เดอร์...
+        </div>
+      )}
+
+      {ordersLoaded && totalScheduled === 0 && unscheduled.length === 0 && pickups.length === 0 && (
         <div className="text-center py-20" style={{ color: COLORS.inkSoft }}>
           <Truck size={32} className="mx-auto mb-2 opacity-50" />
           ยังไม่มีออร์เดอร์ที่ต้องจัดส่ง
@@ -6076,7 +6100,7 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
               </button>
               <button
                 onClick={() => { onAdvance(confirmRevertId); setConfirmRevertId(null); }}
-                style={{ background: "#C0533F", color: "#FFF" }}
+                style={{ background: "#A0432F", color: "#FFF" }}
                 className="flex-1 text-xs font-semibold py-2.5 rounded-xl"
               >
                 ย้อนกลับ
@@ -6602,7 +6626,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
               <button onClick={() => startEdit(p)} style={{ color: COLORS.inkSoft }} className="text-xs font-semibold flex items-center gap-1">
                 <Pencil size={13} /> แก้ไข
               </button>
-              <button onClick={() => setConfirmDelete(p.id)} style={{ color: "#C0533F" }} className="text-xs font-semibold flex items-center gap-1">
+              <button onClick={() => setConfirmDelete(p.id)} style={{ color: "#A0432F" }} className="text-xs font-semibold flex items-center gap-1">
                 <Trash2 size={13} /> ลบ
               </button>
             </div>
@@ -6629,7 +6653,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
               >
                 ยกเลิก
               </button>
-              <button onClick={() => remove(confirmDelete)} style={{ background: "#C0533F", color: "#FFF" }} className="flex-1 text-xs font-semibold py-2.5 rounded-xl">
+              <button onClick={() => remove(confirmDelete)} style={{ background: "#A0432F", color: "#FFF" }} className="flex-1 text-xs font-semibold py-2.5 rounded-xl">
                 ลบโปรโมชั่น
               </button>
             </div>
@@ -6772,7 +6796,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                           style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
                         />
                         {form.spendTiers.length > 1 && (
-                          <button onClick={() => removeTier("spendTiers", i)} style={{ color: "#C0533F" }} className="text-xs font-bold px-1">✕</button>
+                          <button onClick={() => removeTier("spendTiers", i)} style={{ color: "#A0432F" }} className="text-xs font-bold px-1">✕</button>
                         )}
                       </div>
                     ))}
@@ -6803,7 +6827,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                           style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
                         />
                         {form.qtyTiers.length > 1 && (
-                          <button onClick={() => removeTier("qtyTiers", i)} style={{ color: "#C0533F" }} className="text-xs font-bold px-1">✕</button>
+                          <button onClick={() => removeTier("qtyTiers", i)} style={{ color: "#A0432F" }} className="text-xs font-bold px-1">✕</button>
                         )}
                       </div>
                     ))}
@@ -7134,7 +7158,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
               <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
                 <p style={{ color: COLORS.inkSoft }} className="text-[11px] font-medium mb-1">สรุปโปรโมชั่น (ลูกค้าจะเห็นแบบนี้)</p>
                 <p style={{ color: COLORS.ink }} className="text-sm font-semibold leading-snug">{builderSummary}</p>
-                <p style={{ color: validationMsg ? "#C0533F" : COLORS.caramelDark }} className="text-[11px] mt-1.5">
+                <p style={{ color: validationMsg ? "#A0432F" : COLORS.caramelDark }} className="text-[11px] mt-1.5">
                   {validationMsg || builderHint}
                 </p>
               </div>
@@ -7316,7 +7340,7 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
             value={newUid}
             onChange={(e) => { setNewUid(e.target.value); setFormError(""); }}
             placeholder="วางรหัสอุปกรณ์ที่นี่"
-            style={{ border: `1px solid ${formError ? "#C0533F" : COLORS.line}`, color: COLORS.ink }}
+            style={{ border: `1px solid ${formError ? "#A0432F" : COLORS.line}`, color: COLORS.ink }}
             className="w-full rounded-xl px-3.5 py-2.5 text-xs font-mono bg-white outline-none"
           />
           <input
@@ -7336,7 +7360,7 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
             เพิ่มสิทธิ์
           </button>
         </div>
-        {formError && <p style={{ color: "#C0533F" }} className="text-[11px] font-medium mt-1.5">{formError}</p>}
+        {formError && <p style={{ color: "#A0432F" }} className="text-[11px] font-medium mt-1.5">{formError}</p>}
       </div>
 
       {/* รายชื่อเครื่องพนักงาน */}
@@ -7393,7 +7417,7 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
               <button
                 type="button"
                 onClick={() => setConfirmRemove(m.uid)}
-                style={{ color: "#C0533F" }}
+                style={{ color: "#A0432F" }}
                 className="text-xs font-semibold px-2 py-1.5 flex-shrink-0"
               >
                 ลบ
@@ -7429,7 +7453,7 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
               >
                 ยกเลิก
               </button>
-              <button onClick={() => remove(confirmRemove)} style={{ background: "#C0533F", color: "#FFF" }} className="flex-1 text-xs font-semibold py-2.5 rounded-xl">
+              <button onClick={() => remove(confirmRemove)} style={{ background: "#A0432F", color: "#FFF" }} className="flex-1 text-xs font-semibold py-2.5 rounded-xl">
                 ลบสิทธิ์
               </button>
             </div>
@@ -7462,8 +7486,8 @@ function StaffStockView({ stockItems, updateStock, menu }) {
   const statusOf = (s) => {
     const qty = Number(s.qty) || 0;
     const min = Number(s.minQty) || 0;
-    if (qty <= 0) return { label: "หมด", color: "#C0533F", bg: "#F3D9D3" };
-    if (min > 0 && qty <= min) return { label: "ใกล้หมด", color: "#B08628", bg: "#F5EAC9" };
+    if (qty <= 0) return { label: "หมด", color: "#A0432F", bg: "#F3D9D3" };
+    if (min > 0 && qty <= min) return { label: "ใกล้หมด", color: "#7A5918", bg: "#F5EAC9" };
     return { label: "ปกติ", color: COLORS.sage, bg: COLORS.sageSoft };
   };
 
@@ -7581,7 +7605,7 @@ function StaffStockView({ stockItems, updateStock, menu }) {
                 <button onClick={() => startEdit(s)} style={{ color: COLORS.inkSoft }} className="w-7 h-7 flex items-center justify-center flex-shrink-0">
                   <Pencil size={14} />
                 </button>
-                <button onClick={() => setConfirmDeleteId(s.id)} style={{ color: "#C0533F" }} className="w-7 h-7 flex items-center justify-center flex-shrink-0">
+                <button onClick={() => setConfirmDeleteId(s.id)} style={{ color: "#A0432F" }} className="w-7 h-7 flex items-center justify-center flex-shrink-0">
                   <Trash2 size={14} />
                 </button>
               </div>
@@ -7607,7 +7631,7 @@ function StaffStockView({ stockItems, updateStock, menu }) {
               <button onClick={() => setConfirmDeleteId(null)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#FFFFFF", color: COLORS.inkSoft, border: `1px solid ${COLORS.line}` }}>
                 ยกเลิก
               </button>
-              <button onClick={() => remove(confirmDeleteId)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#C0533F", color: "#FFF9F0" }}>
+              <button onClick={() => remove(confirmDeleteId)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#A0432F", color: "#FFF9F0" }}>
                 ลบ
               </button>
             </div>
@@ -7691,7 +7715,7 @@ function StaffStockView({ stockItems, updateStock, menu }) {
 
 // ================= STAFF ACCOUNTING VIEW (บัญชี) =================
 // ต้นทุน/กำไรต่อเมนู + สรุปแยกวิธีชำระ + บันทึกรายจ่ายรายวัน
-function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeExpenseEntry, salesRound, setActiveRound, applyActiveEntriesChange, closeActiveRound, editSalesRoundHistory, deleteSalesRoundHistory }) {
+function StaffAccountingView({ orders, ordersLoaded, menu, expenses, addExpenseEntry, removeExpenseEntry, salesRound, setActiveRound, applyActiveEntriesChange, closeActiveRound, editSalesRoundHistory, deleteSalesRoundHistory }) {
   const [range, setRange] = useState("today"); // today | 7d | 30d | all
   const [expForm, setExpForm] = useState({ title: "", amount: "", category: "วัตถุดิบ", note: "", date: todayKey() });
   const [confirmDeleteExpense, setConfirmDeleteExpense] = useState(null);
@@ -8079,9 +8103,9 @@ function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeEx
           onClick={exportCancelled}
           disabled={cancelledOrders.length === 0}
           style={{
-            background: cancelledOrders.length > 0 ? "#C0533F" : "#E3DDD3",
+            background: cancelledOrders.length > 0 ? "#A0432F" : "#E3DDD3",
             color: cancelledOrders.length > 0 ? "#FFF9F0" : "#A99A87",
-            border: `1px solid ${cancelledOrders.length > 0 ? "#C0533F" : "#E3DDD3"}`,
+            border: `1px solid ${cancelledOrders.length > 0 ? "#A0432F" : "#E3DDD3"}`,
           }}
           className="flex-1 rounded-xl py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
         >
@@ -8170,7 +8194,7 @@ function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeEx
                 <span style={{ color: COLORS.inkSoft }} className="flex-shrink-0">
                   {new Date(e.createdAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })}
                 </span>
-                <button onClick={() => removeRoundEntry(e.id)} style={{ color: "#C0533F" }} className="flex-shrink-0">
+                <button onClick={() => removeRoundEntry(e.id)} style={{ color: "#A0432F" }} className="flex-shrink-0">
                   <X size={12} />
                 </button>
               </div>
@@ -8306,7 +8330,7 @@ function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeEx
                       </span>
                       <div className="flex items-center gap-2.5">
                         <span
-                          style={{ color: r.diff === 0 ? COLORS.sage : r.diff > 0 ? "#B08628" : "#C0533F" }}
+                          style={{ color: r.diff === 0 ? COLORS.sage : r.diff > 0 ? "#7A5918" : "#A0432F" }}
                           className="text-xs font-bold"
                         >
                           {r.diff === 0 ? "ตรงเป๊ะ" : r.diff > 0 ? `เกิน ฿${fmtBaht(r.diff)}` : `ขาด ฿${fmtBaht(Math.abs(r.diff))}`}
@@ -8314,7 +8338,7 @@ function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeEx
                         <button onClick={() => startEditRound(r)} style={{ color: COLORS.inkSoft }} className="flex-shrink-0">
                           <Pencil size={13} />
                         </button>
-                        <button onClick={() => setConfirmDeleteRound(r.id)} style={{ color: "#C0533F" }} className="flex-shrink-0">
+                        <button onClick={() => setConfirmDeleteRound(r.id)} style={{ color: "#A0432F" }} className="flex-shrink-0">
                           <Trash2 size={13} />
                         </button>
                       </div>
@@ -8345,13 +8369,13 @@ function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeEx
         </div>
         <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
           <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">กำไรขั้นต้น</p>
-          <p style={{ color: grossProfit >= 0 ? COLORS.sage : "#C0533F" }} className="text-lg font-bold">
+          <p style={{ color: grossProfit >= 0 ? COLORS.sage : "#A0432F" }} className="text-lg font-bold">
             ฿{fmtBaht(grossProfit)}
           </p>
         </div>
         <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
           <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">รายจ่ายในช่วงนี้</p>
-          <p style={{ color: "#C0533F" }} className="text-lg font-bold">-฿{fmtBaht(totalExpense)}</p>
+          <p style={{ color: "#A0432F" }} className="text-lg font-bold">-฿{fmtBaht(totalExpense)}</p>
         </div>
       </div>
       {cancelledMade.length > 0 && (
@@ -8386,7 +8410,7 @@ function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeEx
           <p style={{ color: COLORS.inkSoft }} className="text-[11px]">ชิ้นที่ขาย</p>
         </div>
         <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
-          <p style={{ color: cancelledInRange > 0 ? "#C0533F" : COLORS.caramelDark }} className="text-lg font-bold">{cancelledInRange}</p>
+          <p style={{ color: cancelledInRange > 0 ? "#A0432F" : COLORS.caramelDark }} className="text-lg font-bold">{cancelledInRange}</p>
           <p style={{ color: COLORS.inkSoft }} className="text-[11px]">ออร์เดอร์ที่ยกเลิก</p>
         </div>
       </div>
@@ -8404,7 +8428,12 @@ function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeEx
 
       {/* กำไร/ขาดทุนต่อเมนู */}
       <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-2">กำไร/ขาดทุนต่อเมนู</p>
-      {menuProfit.length === 0 ? (
+      {!ordersLoaded ? (
+        <div className="text-center py-8 mb-4" style={{ color: COLORS.inkSoft }}>
+          <Loader2 size={24} className="mx-auto mb-2 animate-spin" />
+          กำลังโหลดข้อมูล...
+        </div>
+      ) : menuProfit.length === 0 ? (
         <div className="text-center py-8 mb-4" style={{ color: COLORS.inkSoft }}>
           <Receipt size={26} className="mx-auto mb-2 opacity-50" />
           ยังไม่มีออร์เดอร์ในช่วงนี้
@@ -8426,7 +8455,7 @@ function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeEx
                   {m.hasCost ? (
                     <>
                       <span>· ต้นทุน ฿{fmtBaht(m.cost)}</span>
-                      <span style={{ color: profit >= 0 ? COLORS.sage : "#C0533F" }} className="font-bold">
+                      <span style={{ color: profit >= 0 ? COLORS.sage : "#A0432F" }} className="font-bold">
                         · กำไร ฿{fmtBaht(profit)}
                       </span>
                     </>
@@ -8525,8 +8554,8 @@ function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeEx
                   {e.note ? ` · ${e.note}` : ""} · {new Date(e.createdAt).toLocaleDateString("th-TH")}
                 </p>
               </div>
-              <span style={{ color: "#C0533F" }} className="text-sm font-bold flex-shrink-0">-฿{fmtBaht(e.amount)}</span>
-              <button onClick={() => setConfirmDeleteExpense(e.id)} style={{ color: "#C0533F" }} className="flex-shrink-0">
+              <span style={{ color: "#A0432F" }} className="text-sm font-bold flex-shrink-0">-฿{fmtBaht(e.amount)}</span>
+              <button onClick={() => setConfirmDeleteExpense(e.id)} style={{ color: "#A0432F" }} className="flex-shrink-0">
                 <Trash2 size={15} />
               </button>
             </div>
@@ -8551,7 +8580,7 @@ function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeEx
                   <span style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">
                     #{o.orderNo} · {o.customerName || "ไม่ระบุชื่อ"}
                   </span>
-                  <span style={{ color: "#C0533F" }} className="text-sm font-bold flex-shrink-0">฿{fmtBaht(calcOrderTotal(o))}</span>
+                  <span style={{ color: "#A0432F" }} className="text-sm font-bold flex-shrink-0">฿{fmtBaht(calcOrderTotal(o))}</span>
                 </div>
                 <p style={{ color: COLORS.inkSoft }} className="text-xs mb-1.5">
                   {new Date(o.createdAt).toLocaleString("th-TH")} · {o.method === "pickup" ? "รับที่ร้าน" : "จัดส่ง"}
@@ -8578,7 +8607,7 @@ function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeEx
               <button onClick={() => setConfirmDeleteExpense(null)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#FFFFFF", color: COLORS.inkSoft, border: `1px solid ${COLORS.line}` }}>
                 ยกเลิก
               </button>
-              <button onClick={() => removeExpense(confirmDeleteExpense)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#C0533F", color: "#FFF9F0" }}>
+              <button onClick={() => removeExpense(confirmDeleteExpense)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#A0432F", color: "#FFF9F0" }}>
                 ลบ
               </button>
             </div>
@@ -8603,7 +8632,7 @@ function StaffAccountingView({ orders, menu, expenses, addExpenseEntry, removeEx
                   setConfirmDeleteRound(null);
                 }}
                 className="flex-1 rounded-xl py-2.5 text-xs font-semibold"
-                style={{ background: "#C0533F", color: "#FFF9F0" }}
+                style={{ background: "#A0432F", color: "#FFF9F0" }}
               >
                 ลบ
               </button>
@@ -8735,6 +8764,10 @@ function App() {
   }, [menuLoaded, menu, promos]);
   const [shopOpen, setShopOpen] = useState(true); // สถานะเปิด/ปิดร้าน — ซิงก์ผ่าน Firestore (config/shopStatus) เหมือนเมนู
   const [orders, setOrders] = useState([]);
+  // ออร์เดอร์โหลดจาก Firestore เสร็จรอบแรกหรือยัง — กันหน้า "ยังไม่มีออร์เดอร์เข้ามา" โผล่ผิดๆ ตอนเพิ่งเปิดแอป
+  // (orders เริ่มเป็น [] ว่างเปล่าเสมอก่อน onSnapshot จะยิงข้อมูลจริงกลับมารอบแรก ถ้าไม่แยกสถานะนี้ไว้
+  // พนักงานที่เพิ่งเปิดแอปพอดีตอนเน็ตช้าจะเห็นข้อความ "ไม่มีออร์เดอร์" ทั้งที่จริงร้านมีออร์เดอร์ค้างอยู่เพียบ)
+  const [ordersLoaded, setOrdersLoaded] = useState(!FIREBASE_SYNC_ENABLED);
   const [recentOrderIds, setRecentOrderIds] = useState(new Set()); // ออร์เดอร์ที่เพิ่งเข้ามาสด ๆ (ไว้ไฮไลต์ชั่วคราว)
   const [customerStage, setCustomerStage] = useState("menu"); // menu | checkout | success
   const [lastOrderNo, setLastOrderNo] = useState(null);
@@ -8895,6 +8928,7 @@ function App() {
     // rules อนุญาต read เฉพาะ staff — ลูกค้าทั่วไปยังไม่ปลดล็อกจะไม่มีสิทธิ์อ่าน
     // ไม่ subscribe ตั้งแต่แรกเลย กันไม่ให้เจอ permission-denied เต็ม console โดยเปล่าประโยชน์
     if (!staffUnlocked) return;
+    setOrdersLoaded(false); // เริ่ม subscribe รอบใหม่ (เช่น ปลดล็อกใหม่หลังจากที่เคยล็อกอยู่) ต้องรอข้อมูลจริงก่อน
     const unsubscribe = db
       .collection("orders")
       .orderBy("createdAt", "asc")
@@ -8942,9 +8976,11 @@ function App() {
           }
           prevOrderIdsRef.current = new Set(newOrders.map((o) => o.id));
           setOrders(newOrders);
+          setOrdersLoaded(true);
         },
         (err) => {
           console.error("Firestore orders subscription failed:", err);
+          setOrdersLoaded(true); // แม้พลาดก็ต้องปลดสถานะ "กำลังโหลด" ไม่งั้นจะติดสปินเนอร์ค้างตลอดไป
         }
       );
     return () => {
@@ -10056,12 +10092,12 @@ function App() {
             inputMode="numeric"
             value={pinInput}
             onChange={(e) => { setPinInput(e.target.value); setPinError(false); }}
-            style={{ border: `1.5px solid ${pinError ? "#C0533F" : COLORS.line}` }}
+            style={{ border: `1.5px solid ${pinError ? "#A0432F" : COLORS.line}` }}
             className="w-full rounded-xl px-4 py-3 text-center text-lg tracking-widest mb-2 outline-none"
             placeholder="••••"
             autoFocus
           />
-          {pinError && <p className="text-xs text-center mb-2" style={{ color: "#C0533F" }}>รหัสไม่ถูกต้อง</p>}
+          {pinError && <p className="text-xs text-center mb-2" style={{ color: "#A0432F" }}>รหัสไม่ถูกต้อง</p>}
           <button
             type="submit"
             disabled={!uid}
@@ -10218,6 +10254,7 @@ function App() {
         {role === "staff-orders" && (
           <StaffOrdersView
             orders={orders}
+            ordersLoaded={ordersLoaded}
             recentOrderIds={recentOrderIds}
             onAdvance={advanceOrder}
             onCancel={cancelOrder}
@@ -10231,7 +10268,7 @@ function App() {
           />
         )}
         {role === "staff-delivery" && (
-          <StaffDeliveryView orders={orders} onAdvance={advanceOrder} onMarkPaid={markOrderPaid} onUnmarkPaid={unmarkOrderPaid} />
+          <StaffDeliveryView orders={orders} ordersLoaded={ordersLoaded} onAdvance={advanceOrder} onMarkPaid={markOrderPaid} onUnmarkPaid={unmarkOrderPaid} />
         )}
         {role === "staff-menu" && (
           <MenuManagerView
@@ -10254,6 +10291,7 @@ function App() {
         {role === "staff-accounting" && (
           <StaffAccountingView
             orders={orders}
+            ordersLoaded={ordersLoaded}
             menu={menu}
             expenses={expenses}
             addExpenseEntry={addExpenseEntry}
