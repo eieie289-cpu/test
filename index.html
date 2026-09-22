@@ -29,8 +29,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
 <!-- jsQR — ตัวถอด QR ในเบราว์เซอร์ ใช้ตรวจว่า QR ที่บีบอัดแล้วยังสแกนได้หรือไม่ -->
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-<!-- qrcode — ใช้สร้างรูป QR พร้อมเพย์แบบระบุยอดเงินเอง (ต่อออร์เดอร์) จากข้อความ payload -->
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 
 <script type="text/babel" data-presets="react">
 const { useState, useMemo, useEffect, useRef } = React;
@@ -224,9 +222,6 @@ const fmtBaht = (n) => {
 };
 let addOnGroupIdCounter = 100;
 const nextAddOnGroupId = () => `g${addOnGroupIdCounter++}`;
-// เช็คว่าลูกค้าเปิดลิงก์อยู่ในเบราว์เซอร์ในแอป LINE ไหม — เบราว์เซอร์แบบนี้ (โดยเฉพาะบน iPhone)
-// จำกัดการดาวน์โหลดไฟล์/แชร์ไฟล์/บันทึกรูปแบบกดค้างไว้มาก ใช้เช็คเพื่อแนะนำให้เปิดด้วยเบราว์เซอร์ปกติแทน
-const isLineInAppBrowser = () => /\bLine\//i.test(navigator.userAgent || "");
 let stockIdCounter = 100;
 const nextStockId = () => `s${stockIdCounter++}`;
 let expenseIdCounter = 100;
@@ -1136,57 +1131,6 @@ function compressQrImage(file, maxDimension = 1200) {
   });
 }
 
-// คำนวณ CRC16 (แบบเดียวกับที่มาตรฐาน EMVCo/พร้อมเพย์ใช้ต่อท้าย payload) — จำเป็นเพื่อให้แอปธนาคารยอมรับ QR
-function crc16PromptPay(str) {
-  let crc = 0xFFFF;
-  for (let i = 0; i < str.length; i++) {
-    let code = (crc >>> 8) & 0xFF;
-    code ^= str.charCodeAt(i) & 0xFF;
-    code ^= code >>> 4;
-    crc = (crc << 8) & 0xFFFF;
-    crc ^= code;
-    code = (code << 5) & 0xFFFF;
-    crc ^= code;
-    code = (code << 7) & 0xFFFF;
-    crc ^= code;
-  }
-  return crc;
-}
-
-// สร้างข้อความ (payload) ของ QR พร้อมเพย์ตามมาตรฐาน EMVCo — รับได้ทั้งเบอร์มือถือ (10 หลัก) และเลขบัตร ปชช./นิติบุคคล (13 หลัก)
-// ใส่ amount เพื่อฝังยอดเงินลงใน QR ไปเลย (ลูกค้าไม่ต้องพิมพ์ยอดเอง) — คืน null ถ้าเลขที่ให้มาไม่ถูกรูปแบบ
-function buildPromptPayPayload(target, amount) {
-  const digits = digitsOnly(target);
-  if (digits.length < 10) return null; // สั้นเกินกว่าจะเป็นเบอร์มือถือ/เลขบัตรได้
-  let targetType;
-  if (digits.length >= 15) targetType = "EWALLETID";
-  else if (digits.length >= 13) targetType = "NATID";
-  else targetType = "MSISDN";
-
-  let formatted;
-  if (digits.length >= 15) formatted = digits.slice(0, 15);
-  else if (digits.length >= 13) formatted = digits.padStart(13, "0");
-  else formatted = digits.replace(/^0/, "66").padStart(13, "0");
-
-  // f() คือตัวช่วยห่อค่าแบบ TLV (Tag-Length-Value) ที่สเปก EMVCo ใช้ทุกฟิลด์
-  const f = (id, value) => `${id}${String(value.length).padStart(2, "0")}${value}`;
-
-  let data = f("00", "01"); // Payload Format Indicator
-  data += f("01", amount ? "12" : "11"); // Point of Initiation Method: 12 = ระบุยอดตายตัว, 11 = ไม่ระบุยอด
-
-  const tag = targetType === "MSISDN" ? "01" : targetType === "NATID" ? "02" : "03";
-  const merchantInfo = f("00", "A000000677010111") + f(tag, formatted); // AID ของพร้อมเพย์ + เลขบัญชีปลายทาง
-  data += f("29", merchantInfo);
-
-  data += f("53", "764"); // รหัสสกุลเงิน THB
-  if (amount && amount > 0) data += f("54", (Math.round(amount * 100) / 100).toFixed(2));
-  data += f("58", "TH");
-
-  data += "6304"; // แท็ก CRC + ความยาวคงที่ 04 (ค่าจริงคำนวณด้านล่าง)
-  const crc = crc16PromptPay(data).toString(16).toUpperCase().padStart(4, "0");
-  return data + crc;
-}
-
 // ถอด QR จากรูป (data URL) ด้วย jsQR — คืน { ok, data } / { ok: null } ถ้าโหลดตัวถอดไม่สำเร็จ
 async function decodeQrFromImage(dataUrl) {
   try {
@@ -2057,7 +2001,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, onCheckOrders, shopOpen
 }
 
 // ================= CHECKOUT VIEW =================
-function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, promptpayId, deliveryHours }) {
+function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliveryHours }) {
   const [method, setMethod] = useState("cash"); // default: จ่ายเงินสด (จ่ายตอนรับของ) — บัตรเครดิตยังไม่รองรับ เลยไม่มีตัวเลือก
   const [collectOnDelivery, setCollectOnDelivery] = useState(false); // โอนแต่เลือก "เก็บปลายทาง" = ไม่ต้องแนบสลิป (จ่ายตอนรับของ)
   const [paying, setPaying] = useState(false);
@@ -2159,25 +2103,6 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, promp
   // ปัดซ้ำอีกรอบตรงนี้กันราคาสุดท้ายที่ลูกค้า/พนักงานเห็นมีเศษยิบย่อยที่ไม่ควรมี
   const discountBaht = Math.round((codeBaht + byocBaht + thresholdBaht + ruleCartDiscount.baht) * 100) / 100;
   const total = Math.round(Math.max(0, subtotal - discountBaht) * 100) / 100;
-  // สร้าง QR พร้อมเพย์แบบระบุยอดเงินตรงตามออร์เดอร์นี้ (ถ้าร้านกรอกเลขพร้อมเพย์ไว้) — คำนวณใหม่ทุกครั้งที่ยอดเปลี่ยน
-  // (เช่น ลูกค้าเปลี่ยนจำนวนแก้วนำมาเอง/ใส่โค้ดส่วนลด) ถ้าไม่มีเลขพร้อมเพย์ หรือสร้างไม่สำเร็จ จะ fallback ไปใช้รูป QR นิ่งที่ร้านอัปโหลดไว้แทน
-  const [dynamicQr, setDynamicQr] = useState(null);
-  useEffect(() => {
-    if (!promptpayId || !total || total <= 0 || typeof window.QRCode === "undefined") {
-      setDynamicQr(null);
-      return;
-    }
-    const payload = buildPromptPayPayload(promptpayId, total);
-    if (!payload) { setDynamicQr(null); return; }
-    let cancelled = false;
-    window.QRCode.toDataURL(payload, { width: 480, margin: 1 }, (err, url) => {
-      if (cancelled) return;
-      if (err) { console.error("Generate PromptPay QR failed:", err); setDynamicQr(null); return; }
-      setDynamicQr(url);
-    });
-    return () => { cancelled = true; };
-  }, [promptpayId, total]);
-  const qrToShow = dynamicQr || shopQr || PROMPTPAY_QR_URL;
   // ป้ายสรุปส่วนลด เช่น "ซื้อครบ + นำแก้วมาเอง + โค้ด SAVE5 + 1แถม1 (ฟรี 1 ชิ้น)"
   const discountSummaryLabel = [
     thresholdBaht > 0 ? "ซื้อครบ" : null,
@@ -2715,11 +2640,11 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, promp
               </span>
             </p>
           )}
-          {!collectOnDelivery && method === "promptpay" && qrToShow && (
+          {!collectOnDelivery && method === "promptpay" && (shopQr || PROMPTPAY_QR_URL) && (
             <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-xl p-4 mb-3 text-center">
               <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-3">สแกนจ่ายผ่านพร้อมเพย์</p>
               <img
-                src={qrToShow}
+                src={shopQr || PROMPTPAY_QR_URL}
                 alt="QR พร้อมเพย์ของร้าน"
                 className="w-48 h-48 mx-auto rounded-lg object-contain"
                 style={{ border: `1px solid ${COLORS.line}` }}
@@ -2729,22 +2654,16 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, promp
               {/* เครื่องที่เปิดแอปสั่งของ กับเครื่องที่ใช้สแกนจ่าย มักเป็นเครื่องเดียวกัน (มือถือเครื่องเดียวสแกน QR บนจอตัวเองไม่ได้)
                   จึงให้ลูกค้าเซฟรูป QR นี้ไว้ก่อน แล้วค่อยเปิดแอปธนาคารไปเลือกรูปจากคลังภาพเพื่อสแกนจ่ายแทน */}
               <a
-                href={qrToShow}
+                href={shopQr || PROMPTPAY_QR_URL}
                 download="promptpay-qr.jpg"
                 style={{ border: `1.5px solid ${COLORS.caramel}`, color: COLORS.caramelDark }}
                 className="w-full mt-3 rounded-xl px-4 py-2.5 text-xs font-semibold inline-flex items-center justify-center gap-1.5"
               >
                 <UploadCloud size={14} style={{ transform: "rotate(180deg)" }} /> บันทึกรูป QR ลงเครื่อง
               </a>
-              {dynamicQr ? (
-                <p style={{ color: COLORS.sage }} className="text-[11px] font-semibold mt-2 leading-relaxed">
-                  QR นี้ระบุยอด ฿{fmtBaht(total)} ไว้ในตัวแล้ว — สแกนแล้วยอดจะขึ้นให้อัตโนมัติ ไม่ต้องพิมพ์เอง
-                </p>
-              ) : (
-                <p style={{ color: "#A0432F" }} className="text-[11px] font-semibold mt-2 leading-relaxed">
-                  กรุณาตรวจสอบยอดชำระให้ตรงกับที่สั่ง และตรวจชื่อก่อนโอนนะครับ
-                </p>
-              )}
+              <p style={{ color: "#A0432F" }} className="text-[11px] font-semibold mt-2 leading-relaxed">
+                กรุณาตรวจสอบยอดชำระให้ตรงกับที่สั่ง และตรวจชื่อก่อนโอนนะครับ
+              </p>
             </div>
           )}
           {collectOnDelivery && (
@@ -3024,28 +2943,19 @@ function drawOrderReceipt(order, shopName) {
 
 function OrderSuccessView({ orderNo, customer, onNewOrder, onCheckOrders, paymentMethod, order, shopName }) {
   const [receiptState, setReceiptState] = useState(""); // "" | "saving" | "error"
-  const [receiptImg, setReceiptImg] = useState(null); // object URL ของภาพหลักฐานที่สร้างแล้ว — เปิดหน้าต่างให้เลือกบันทึก/แชร์
+  const [receiptImg, setReceiptImg] = useState(null); // dataUrl ภาพหลักฐานที่สร้างแล้ว — เปิดหน้าต่างให้เลือกบันทึก/แชร์
   const [savedNow, setSavedNow] = useState(false); // เพิ่งกดบันทึกลงเครื่อง
 
   const receiptFileName = `หลักฐานออร์เดอร์-${order.orderNo}.png`;
 
-  // เคลียร์ object URL เก่าทิ้งทุกครั้งที่สร้างรูปใหม่ หรือตอนออกจากหน้านี้ — กันหน่วยความจำรั่ว
-  useEffect(() => {
-    return () => { if (receiptImg) URL.revokeObjectURL(receiptImg); };
-  }, [receiptImg]);
-
   // สร้างภาพหลักฐาน แล้วเปิดหน้าต่างให้ลูกค้าเลือกเอง: บันทึกลงเครื่องตรง ๆ หรือแชร์
   // (ไม่บังคับเปิดช่องแชร์อีกแล้ว — บนมือถือกดค้างที่รูปก็เซฟลงเครื่องได้)
-  // ใช้ canvas.toBlob() + URL.createObjectURL() แทน toDataURL() — เบราว์เซอร์ในแอป (เช่น LINE) โดยเฉพาะบน iPhone
-  // มักกดค้าง "บันทึกรูป" ไม่ได้ถ้า src เป็น data: URI ตรง ๆ แต่ถ้าเป็น blob: URL จะเซฟได้ชัวร์กว่ามาก
   const saveReceipt = async () => {
     if (!order || receiptState === "saving") return;
     setReceiptState("saving");
     try {
       const canvas = drawOrderReceipt(order, shopName);
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-      if (!blob) throw new Error("toBlob returned null");
-      setReceiptImg(URL.createObjectURL(blob));
+      setReceiptImg(canvas.toDataURL("image/png"));
       setSavedNow(false);
     } catch (err) {
       console.error("Failed to create receipt image:", err);
@@ -3152,14 +3062,8 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, onCheckOrders, paymen
             <div style={{ background: "#FFFFFF", borderRadius: 20, padding: 14 }} className="max-h-[62vh] overflow-auto">
               <img src={receiptImg} alt="หลักฐานออร์เดอร์" style={{ width: "100%", borderRadius: 10, display: "block" }} />
             </div>
-            {isLineInAppBrowser() && (
-              <p style={{ color: "#FFF3E6", background: "rgba(255,255,255,0.12)" }} className="text-xs text-center mt-3 leading-relaxed rounded-xl px-3 py-2">
-                กำลังเปิดผ่านแอป LINE อยู่ — ถ้ากดบันทึก/แชร์แล้วไม่ทำงาน ให้กดปุ่ม <b>⋯</b> มุมขวาบน (หรือไอคอนแชร์ด้านล่าง) แล้วเลือก <b>"เปิดด้วยเบราว์เซอร์อื่น"</b> จะเซฟรูปได้ชัวร์กว่า
-              </p>
-            )}
             <p style={{ color: "#FFF3E6" }} className="text-xs text-center mt-3 leading-relaxed">
               บนมือถือ: <b>กดค้างที่รูป</b> แล้วเลือก "บันทึกรูป" เพื่อเซฟลงเครื่องได้เลย
-              (ถ้ายังเซฟไม่ได้ แคปหน้าจอไว้แทนก็ได้)
             </p>
             <div className="flex gap-2 mt-3">
               <button
@@ -3348,7 +3252,6 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
   const [shopNameInput, setShopNameInput] = useState("");
   const [shopSloganInput, setShopSloganInput] = useState("");
   const [shopQrInput, setShopQrInput] = useState("");
-  const [promptpayIdInput, setPromptpayIdInput] = useState(""); // เลขพร้อมเพย์ของร้าน (เบอร์มือถือ 10 หลัก หรือเลขบัตร ปชช./นิติบุคคล 13 หลัก) — ใช้สร้าง QR ระบุยอดเงินต่อออร์เดอร์
   const [openTimeInput, setOpenTimeInput] = useState("09:00");
   const [closeTimeInput, setCloseTimeInput] = useState("20:00");
   const [deliveryOpenInput, setDeliveryOpenInput] = useState("09:00");
@@ -3381,7 +3284,6 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
     setShopNameInput((shopInfo && shopInfo.name) || "");
     setShopSloganInput((shopInfo && shopInfo.slogan) || "");
     setShopQrInput((shopInfo && shopInfo.qr) || "");
-    setPromptpayIdInput((shopInfo && shopInfo.promptpayId) || "");
     setOpenTimeInput((shopInfo && shopInfo.openTime) || "09:00");
     setCloseTimeInput((shopInfo && shopInfo.closeTime) || "20:00");
     setDeliveryOpenInput((shopInfo && shopInfo.deliveryOpenTime) || "09:00");
@@ -3439,7 +3341,6 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
       name: shopNameInput,
       slogan: shopSloganInput,
       qr: shopQrInput,
-      promptpayId: digitsOnly(promptpayIdInput),
       openTime: clampTimeInput(openTimeInput, "09:00"),
       closeTime: clampTimeInput(closeTimeInput, "20:00"),
       deliveryOpenTime: clampTimeInput(deliveryOpenInput, "09:00"),
@@ -4128,25 +4029,6 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
             (ระบบยังใช้งานได้ตามปกติ แต่ลูกค้าอาจเห็นช่วงเวลาที่แสดงกับที่เลือกได้จริงไม่ตรงกัน)
           </p>
         )}
-
-        <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mt-3 mb-1">เลขพร้อมเพย์ของร้าน (แนะนำ)</label>
-        <input
-          type="text"
-          inputMode="numeric"
-          value={promptpayIdInput}
-          onChange={(e) => setPromptpayIdInput(digitsOnly(e.target.value).slice(0, 13))}
-          placeholder="เบอร์มือถือ 10 หลัก หรือเลขบัตร ปชช. 13 หลัก"
-          className="w-full rounded-xl px-3 py-2.5 text-sm outline-none bg-white"
-          style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
-        />
-        {promptpayIdInput && promptpayIdInput.length !== 10 && promptpayIdInput.length !== 13 && (
-          <p style={{ color: "#A0432F" }} className="text-[11px] font-medium mt-1.5 leading-relaxed">
-            ⚠ เลขที่กรอกมี {promptpayIdInput.length} หลัก — ต้องเป็นเบอร์มือถือ 10 หลัก หรือเลขบัตร ปชช./นิติบุคคล 13 หลักเท่านั้น
-          </p>
-        )}
-        <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1.5 leading-relaxed">
-          ถ้ากรอกไว้ ระบบจะสร้าง QR ที่ระบุยอดเงินตรงตามแต่ละออร์เดอร์ให้อัตโนมัติ (ลูกค้าไม่ต้องพิมพ์ยอดเอง) — รูป QR นิ่งด้านล่างจะใช้เป็นสำรองกรณียังไม่กรอกเลขนี้ หรือสร้าง QR ไม่สำเร็จ
-        </p>
 
         <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mt-3 mb-1">โค้ด QR (พร้อมเพย์)</label>
         <div className="flex items-center gap-3">
@@ -5374,6 +5256,11 @@ function StaffOrdersView({ orders, ordersLoaded, recentOrderIds, onAdvance, onCa
                       </span>
                     </div>
                   )}
+                  {order.promoQuotaCountFailed && (
+                    <p style={{ color: "#A0432F" }} className="text-[10px] font-semibold mb-0.5 leading-relaxed">
+                      ⚠ นับโควตาโค้ดของออร์เดอร์นี้ไม่สำเร็จ — โค้ดอาจไม่ปิดอัตโนมัติเมื่อครบโควตา เช็ค Firestore Rules
+                    </p>
+                  )}
                   <span style={{ color: COLORS.caramelDark }} className="font-bold text-sm">฿{fmtBaht(total)}</span>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
@@ -6126,6 +6013,11 @@ function StaffDeliveryView({ orders, ordersLoaded, onAdvance, onMarkPaid, onUnma
                   ส่วนลด {order.discount.label || ("โค้ด " + (order.discount.code || ""))} -฿{fmtBaht(order.discount.baht)}
                 </span>
               </div>
+            )}
+            {order.promoQuotaCountFailed && (
+              <p style={{ color: "#A0432F" }} className="text-[10px] font-semibold mb-0.5 leading-relaxed">
+                ⚠ นับโควตาโค้ดของออร์เดอร์นี้ไม่สำเร็จ — โค้ดอาจไม่ปิดอัตโนมัติเมื่อครบโควตา เช็ค Firestore Rules
+              </p>
             )}
             <span style={{ color: COLORS.caramelDark }} className="font-bold text-sm">฿{fmtBaht(total)}</span>
           </div>
@@ -8922,7 +8814,6 @@ function App() {
     name: "น้ำหวาน & เบเกอรี่",
     slogan: "อบใหม่ทุกวัน · ปั่นสดทุกแก้ว",
     qr: PROMPTPAY_QR_URL,
-    promptpayId: "",
     openTime: "09:00",
     closeTime: "20:00",
     deliveryOpenTime: "09:00",
@@ -9451,7 +9342,6 @@ function App() {
               name: (d.name && String(d.name).trim()) || "น้ำหวาน & เบเกอรี่",
               slogan: (d.slogan && String(d.slogan).trim()) || "อบใหม่ทุกวัน · ปั่นสดทุกแก้ว",
               qr: d.qr || PROMPTPAY_QR_URL,
-              promptpayId: (d.promptpayId && String(d.promptpayId)) || "",
               openTime: (d.openTime && String(d.openTime)) || "09:00",
               closeTime: (d.closeTime && String(d.closeTime)) || "20:00",
               deliveryOpenTime: (d.deliveryOpenTime && String(d.deliveryOpenTime)) || "09:00",
@@ -9477,7 +9367,6 @@ function App() {
       name: (info.name || "").trim() || "น้ำหวาน & เบเกอรี่",
       slogan: (info.slogan || "").trim() || "อบใหม่ทุกวัน · ปั่นสดทุกแก้ว",
       qr: info.qr || PROMPTPAY_QR_URL,
-      promptpayId: digitsOnly(info.promptpayId || ""),
       openTime: clampTimeInput(info.openTime, "09:00"),
       closeTime: clampTimeInput(info.closeTime, "20:00"),
       deliveryOpenTime: clampTimeInput(info.deliveryOpenTime, "09:00"),
@@ -9758,7 +9647,7 @@ function App() {
     // เขียนไปที่ฟิลด์ usage ของ config/promotions ด้วย FieldValue increment/arrayUnion (อัปเดตแบบอะตอมมิก)
     // ทำไมไม่เขียนทับ items ทั้งก้อน: เครื่องลูกค้าไม่มีสิทธิ์เขียน config (rules กันไว้) —
     // rules เปิดให้ลูกค้าอัปเดตได้เฉพาะฟิลด์ usage เท่านั้น พนักงานยังเขียนได้ทุกอย่างเหมือนเดิม
-    const countPromoUse = () => {
+    const countPromoUse = (orderId) => {
       if (!discount || !discount.promoId) return;
       if (!FIREBASE_SYNC_ENABLED) {
         // โหมดออฟไลน์ — อัปเดตเฉพาะ state ในเครื่อง (ไม่มี Firestore ไม่มีลูกค้าเครื่องอื่นมาแย่งพร้อมกันอยู่แล้ว)
@@ -9800,6 +9689,19 @@ function App() {
         // ออร์เดอร์ยังบันทึกสำเร็จอยู่ (ลูกค้าจ่ายเงินไปแล้ว) แค่การนับโควตาโค้ดพลาด — พนักงานตรวจสอบย้อนหลังได้จาก log
         // ไม่ throw ต่อ เพราะไม่อยากบล็อกออร์เดอร์ที่ลูกค้าจ่ายเงินสำเร็จแล้วจากการนับโควตาที่พลาดทีหลัง
         console.error("นับการใช้โค้ดไม่สำเร็จ:", err);
+        // เดิมพลาดแบบเงียบ ๆ เห็นแค่ใน console ของเครื่องลูกค้า (พนักงานไม่มีทางรู้เลย) — จุดนี้มักเป็นสาเหตุที่
+        // โค้ดใช้เกินโควตาที่ตั้งไว้ได้เรื่อย ๆ เพราะยอดที่นับไม่เคยขยับขึ้นจริงใน Firestore (เช่น Rules ยังไม่เปิดให้
+        // ลูกค้าเขียนฟิลด์ usage ของ config/promotions) ทำให้เช็คโควตาที่หน้าใส่โค้ดเทียบกับ 0 ตลอด ไม่มีทางถึงลิมิต
+        // เขียน flag ติดไว้ที่ตัวออร์เดอร์เอง ให้พนักงานเห็นตรง ๆ ในหน้าออร์เดอร์ ไม่ต้องเปิด console เอง
+        if (orderId) {
+          db.collection("orders")
+            .doc(orderId)
+            .update({
+              promoQuotaCountFailed: true,
+              promoQuotaCountError: String((err && (err.code || err.message)) || err),
+            })
+            .catch(() => {}); // เขียน flag ไม่สำเร็จด้วยก็ปล่อยไป ไม่ใช่เรื่องใหญ่ อย่างน้อย log ยังมี
+        }
       });
     };
     const newOrder = {
@@ -9830,7 +9732,7 @@ function App() {
         setLastPaymentMethod(paymentMethod);
         setLastCustomer(customer || null);
         setLastOrder({ ...newOrder, id: docRef.id });
-        countPromoUse();
+        countPromoUse(docRef.id);
         rememberMyOrder(docRef.id);
         setCart([]);
         setCustomerStage("success");
@@ -10379,7 +10281,6 @@ function App() {
             promos={promos}
             uid={uid}
             shopQr={shopInfo.qr}
-            promptpayId={shopInfo.promptpayId}
             deliveryHours={shopInfo}
           />
         )}
